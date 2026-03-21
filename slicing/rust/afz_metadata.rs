@@ -72,7 +72,7 @@ const PROFILE_PWSZ: AfzMachineProfile = AfzMachineProfile {
     print_z_mm: 230.0,
     rotate_z: 0.0,
     raster_segments_capacity: 100000,
-    machine_max_acceleration_z: 160,
+    machine_max_acceleration_z: 20,
     prev1_size: [224, 168],
     prev2_size: [336, 252],
     cloud_prev_size: [800, 600],
@@ -88,7 +88,7 @@ const PROFILE_PM7: AfzMachineProfile = AfzMachineProfile {
     print_z_mm: 230.0,
     rotate_z: 0.0,
     raster_segments_capacity: 100000,
-    machine_max_acceleration_z: 160,
+    machine_max_acceleration_z: 20,
     prev1_size: [168, 126],
     prev2_size: [168, 126],
     cloud_prev_size: [800, 600],
@@ -104,7 +104,7 @@ const PROFILE_PM4U: AfzMachineProfile = AfzMachineProfile {
     print_z_mm: 165.0,
     rotate_z: 180.0,
     raster_segments_capacity: 100000,
-    machine_max_acceleration_z: 160,
+    machine_max_acceleration_z: 20,
     prev1_size: [168, 126],
     prev2_size: [168, 126],
     cloud_prev_size: [800, 600],
@@ -157,6 +157,7 @@ pub(super) struct AfzTimingModel {
 
     pub transition_layer_count: u32,
     pub anti_alias_level: u32,
+    pub twostage: bool,
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -216,6 +217,12 @@ pub(super) fn parse_afz_timing_model(job: &SliceJobV3) -> AfzTimingModel {
     let meta = parse_json(&job.metadata_json);
     let material = meta.as_ref().and_then(|m| m.get("material"));
     let anycubic = meta.as_ref().and_then(|m| m.get("anycubic"));
+    let printer = meta.as_ref().and_then(|m| m.get("printer"));
+
+    let settings_mode = printer
+        .and_then(|p| get_str(p, "settingsMode"))
+        .unwrap_or("simple");
+    let twostage = settings_mode.eq_ignore_ascii_case("twostage");
 
     let f = |section: Option<&Value>, key: &str| -> Option<f32> {
         section.and_then(|s| get_f32(s, key))
@@ -288,6 +295,7 @@ pub(super) fn parse_afz_timing_model(job: &SliceJobV3) -> AfzTimingModel {
         retract_speed2_mm_s: retract_speed2,
         transition_layer_count,
         anti_alias_level: aa_level.clamp(1, 16),
+        twostage,
     }
 }
 

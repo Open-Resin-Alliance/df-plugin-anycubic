@@ -7,6 +7,10 @@ export const ANYCUBIC_AZF_FORMAT_DEFINITION: SlicingFormatDefinition = {
   ownership: 'plugin',
   layerDataKind: 'raw-mask',
   pluginId: 'anycubic',
+  settingsModes: [
+    { value: 'simple', label: 'Simple', isDefault: true },
+    { value: 'twostage', label: 'Advanced' },
+  ],
   rustModulePath: 'formats::azf',
   wasmExportName: 'encode_azf_container',
   notes: 'Anycubic Zip Format (AZF) for Photon Mono M7 series and Mono 4 Ultra printers.',
