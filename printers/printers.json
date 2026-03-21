@@ -1,0 +1,42 @@
+[
+  {
+    "presetId": "anycubic-photon-mono-m7-max-pm7m",
+    "profileVersion": 1,
+    "manufacturer": "Anycubic",
+    "family": "Photon Mono M7",
+    "name": "Photon Mono M7 Max",
+    "display": { "resolutionX": 6480, "resolutionY": 3600, "outputFormat": ".pm7m" },
+    "buildVolumeMm": { "width": 297.5, "depth": 164, "height": 300 },
+    "pixelSize": { "x": 46.0, "y": 46.0 }
+  },
+  {
+    "presetId": "anycubic-photon-mono-m7-pro-pwsz",
+    "profileVersion": 1,
+    "manufacturer": "Anycubic",
+    "family": "Photon Mono M7",
+    "name": "Photon Mono M7 Pro",
+    "display": { "resolutionX": 13312, "resolutionY": 5120, "outputFormat": ".pwsz" },
+    "buildVolumeMm": { "width": 223.642, "depth": 126.48, "height": 230 },
+    "pixelSize": { "x": 16.8, "y": 24.8 }
+  },
+  {
+    "presetId": "anycubic-photon-mono-m7-pm7",
+    "profileVersion": 1,
+    "manufacturer": "Anycubic",
+    "family": "Photon Mono M7",
+    "name": "Photon Mono M7",
+    "display": { "resolutionX": 13312, "resolutionY": 5120, "outputFormat": ".pm7" },
+    "buildVolumeMm": { "width": 223.642, "depth": 126.48, "height": 230 },
+    "pixelSize": { "x": 16.8, "y": 24.8 }
+  },
+  {
+    "presetId": "anycubic-photon-mono-4-ultra-pm4u",
+    "profileVersion": 1,
+    "manufacturer": "Anycubic",
+    "family": "Photon Mono 4",
+    "name": "Photon Mono 4 Ultra",
+    "display": { "resolutionX": 9024, "resolutionY": 5120, "outputFormat": ".pm4u" },
+    "buildVolumeMm": { "width": 153.408, "depth": 87.04, "height": 165 },
+    "pixelSize": { "x": 17.0, "y": 17.0 }
+  }
+]
