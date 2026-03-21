@@ -88,7 +88,7 @@ pub(super) fn build_afz_container(
     zip.write_all(settings_json.as_bytes())?;
 
     // 2. Print info
-    let print_info_json = build_print_info_json(job);
+    let print_info_json = build_print_info_json(job, timing, build, layers);
     zip.start_file(PRINT_INFO_FILE, options)?;
     zip.write_all(print_info_json.as_bytes())?;
 
@@ -162,7 +162,8 @@ fn jf(v: f32) -> String {
 }
 
 fn build_settings_json(job: &SliceJobV3, timing: &AfzTimingModel, build: &AfzBuildModel, profile: &AfzMachineProfile) -> String {
-    // Build the multi_state_paras for the resin profile
+    // Build the multi_state_paras for the resin profile.
+    // Stage 0 = step 1, stage 1 = step 2 for all fields (height, up_speed, down_speed).
     let multi_state = format!(
         r#"{{
           "bott_0": {{ "height": {bh1}, "up_speed": {bus1}, "down_speed": {bds1} }},
@@ -252,13 +253,13 @@ fn build_settings_json(job: &SliceJobV3, timing: &AfzTimingModel, build: &AfzBui
       }},
       "slice_extpara": {{
         "version": "3",
-        "multi_state_used": 0,
+        "multi_state_used": {multi_state_used},
         "transition_layercount": {transition_layers},
         "transition_type": 0,
         "multi_state_paras": {multi_state},
         "exposure_compensate": 0.0,
         "intelli_mode": 0,
-        "max_acceleration": 2.0,
+        "max_acceleration": {max_acceleration},
         "separate_support_exposure_delayed": 0.0
       }},
       "slicepara": {{
@@ -357,6 +358,8 @@ fn build_settings_json(job: &SliceJobV3, timing: &AfzTimingModel, build: &AfzBui
         lift_speed = jf(timing.lift_speed_mm_s),
         retract_speed = jf(timing.retract_speed_mm_s),
         multi_state = multi_state,
+        multi_state_used = if timing.twostage { 1 } else { 0 },
+        max_acceleration = profile.machine_max_acceleration_z,
     )
 }
 
@@ -364,13 +367,26 @@ fn build_layers_controller_json(timing: &AfzTimingModel, layers: &[AfzPreparedLa
     let mut entries = Vec::with_capacity(layers.len());
     let mut min_height: f32 = 0.0;
 
+    let transition_start = timing.bottom_layer_count;
+    let transition_end = transition_start + timing.transition_layer_count;
+
     for layer in layers {
-        let is_bottom = (layer.index as u32) < timing.bottom_layer_count;
-        let exposure = if is_bottom {
+        let layer_idx = layer.index as u32;
+
+        let exposure = if layer_idx < transition_start {
+            // Bottom layer
             timing.bottom_exposure_sec
+        } else if layer_idx < transition_end && timing.transition_layer_count > 0 {
+            // Transition layer — linear interpolation from bottom to normal exposure
+            let progress = (layer_idx - transition_start) as f32
+                / timing.transition_layer_count as f32;
+            timing.bottom_exposure_sec
+                + (timing.normal_exposure_sec - timing.bottom_exposure_sec) * progress
         } else {
             timing.normal_exposure_sec
         };
+
+        let is_bottom = layer_idx < transition_start;
         let lift_height = if is_bottom {
             timing.bottom_lift_height_mm
         } else {
@@ -414,31 +430,102 @@ fn build_layers_controller_json(timing: &AfzTimingModel, layers: &[AfzPreparedLa
     )
 }
 
-fn build_print_info_json(job: &SliceJobV3) -> String {
-    // Try to extract cost/volume/time from metadata if available
-    let meta: Option<serde_json::Value> = serde_json::from_str(&job.metadata_json).ok();
-    let material = meta.as_ref().and_then(|m| m.get("material"));
+fn build_print_info_json(
+    job: &SliceJobV3,
+    timing: &AfzTimingModel,
+    build: &AfzBuildModel,
+    layers: &[AfzPreparedLayer],
+) -> String {
+    // Pixel area in mm²
+    let pixel_area_mm2 = (build.display_width_mm / job.source_width_px as f32)
+        * (build.display_height_mm / job.source_height_px as f32);
 
-    let volume_ml = material
-        .and_then(|m| m.get("volumeMl").and_then(|v| v.as_f64()))
-        .unwrap_or(0.0) as f32;
-    let cost = material
-        .and_then(|m| m.get("cost").and_then(|v| v.as_f64()))
-        .unwrap_or(0.0) as f32;
-    let print_time = material
-        .and_then(|m| m.get("printTimeSec").and_then(|v| v.as_f64()))
-        .unwrap_or(0.0) as f32;
+    // Volume: sum of non-zero pixels × pixel area × layer height, converted mm³ → ml
+    let total_volume_mm3: f32 = layers
+        .iter()
+        .map(|l| l.non_zero_pixel_count as f32 * pixel_area_mm2 * timing.layer_height_mm)
+        .sum();
+    let volume_ml = total_volume_mm3 / 1000.0;
+
+    // Weight: volume × density
+    let weight_g = volume_ml * build.resin_density;
+
+    // Cost: (volume used / bottle volume) × bottle price
+    let cost = if build.resin_volume_ml > 0.0 {
+        (volume_ml / build.resin_volume_ml) * build.resin_price
+    } else {
+        0.0
+    };
+
+    // Print time estimate (seconds)
+    let transition_start = timing.bottom_layer_count;
+    let transition_end = transition_start + timing.transition_layer_count;
+
+    let mut print_time_sec: f32 = 0.0;
+    for layer in layers {
+        let layer_idx = layer.index as u32;
+        let is_bottom = layer_idx < transition_start;
+
+        // Exposure
+        let exposure = if layer_idx < transition_start {
+            timing.bottom_exposure_sec
+        } else if layer_idx < transition_end && timing.transition_layer_count > 0 {
+            let progress = (layer_idx - transition_start) as f32
+                / timing.transition_layer_count as f32;
+            timing.bottom_exposure_sec
+                + (timing.normal_exposure_sec - timing.bottom_exposure_sec) * progress
+        } else {
+            timing.normal_exposure_sec
+        };
+        print_time_sec += exposure;
+
+        // Wait time before cure
+        print_time_sec += timing.wait_time_before_cure_sec;
+
+        // Lift motion: stage 1 + stage 2 (time = distance / speed)
+        let (lift_h1, lift_s1, lift_h2, lift_s2) = if is_bottom {
+            (timing.bottom_lift_height_mm, timing.bottom_lift_speed_mm_s,
+             timing.bottom_lift_height2_mm, timing.bottom_lift_speed2_mm_s)
+        } else {
+            (timing.lift_height_mm, timing.lift_speed_mm_s,
+             timing.lift_height2_mm, timing.lift_speed2_mm_s)
+        };
+
+        if lift_s1 > 0.0 { print_time_sec += lift_h1 / lift_s1; }
+        if lift_s2 > 0.0 { print_time_sec += lift_h2 / lift_s2; }
+
+        // Retract motion: total retract distance = total lift distance
+        let total_lift = lift_h1 + lift_h2;
+        let (ret_s1, ret_s2) = if is_bottom {
+            (timing.bottom_retract_speed_mm_s, timing.bottom_retract_speed2_mm_s)
+        } else {
+            (timing.retract_speed_mm_s, timing.retract_speed2_mm_s)
+        };
+
+        // Retract uses total lift distance, split proportionally if two stages
+        if ret_s1 > 0.0 && ret_s2 > 0.0 {
+            // Approximate: split retract distance same as lift distance ratio
+            let ret_h1 = lift_h1;
+            let ret_h2 = total_lift - ret_h1;
+            print_time_sec += ret_h1 / ret_s1;
+            if ret_h2 > 0.0 { print_time_sec += ret_h2 / ret_s2; }
+        } else if ret_s1 > 0.0 {
+            print_time_sec += total_lift / ret_s1;
+        }
+    }
 
     format!(
         r#"{{
   "cost": {cost},
-  "currency": "\u20ac",
+  "currency": "$",
   "print_time": {print_time},
-  "volume": {volume}
+  "volume": {volume},
+  "weight": {weight}
 }}"#,
         cost = jf(cost),
-        print_time = jf(print_time),
+        print_time = jf(print_time_sec),
         volume = jf(volume_ml),
+        weight = jf(weight_g),
     )
 }
 
