@@ -183,6 +183,8 @@ pub(super) struct AfzBuildModel {
     pub resin_resin_name: String,
     pub resin_film_name: String,
     pub resin_setting_name: String,
+    pub target_temperature: f32,
+    pub intelligent_release: bool,
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -203,6 +205,10 @@ fn get_u32(v: &Value, key: &str) -> Option<u32> {
 
 fn get_str<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
     v.get(key).and_then(Value::as_str)
+}
+
+fn get_bool(v: &Value, key: &str) -> Option<bool> {
+    v.get(key).and_then(Value::as_bool)
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -303,8 +309,14 @@ pub(super) fn parse_afz_timing_model(job: &SliceJobV3) -> AfzTimingModel {
 pub(super) fn parse_afz_build_model(job: &SliceJobV3) -> AfzBuildModel {
     let meta = parse_json(&job.metadata_json);
     let anycubic = meta.as_ref().and_then(|m| m.get("anycubic"));
+    let material = meta.as_ref().and_then(|m| m.get("material"));
     let printer = meta.as_ref().and_then(|m| m.get("printer"));
     let build_volume = printer.and_then(|p| p.get("buildVolumeMm"));
+
+    let settings_mode = printer
+        .and_then(|p| get_str(p, "settingsMode"))
+        .unwrap_or("simple");
+    let twostage = settings_mode.eq_ignore_ascii_case("twostage");
 
     let key_suffix = anycubic
         .and_then(|a| get_str(a, "keySuffix"))
@@ -375,6 +387,15 @@ pub(super) fn parse_afz_build_model(job: &SliceJobV3) -> AfzBuildModel {
         .and_then(|a| get_f32(a, "resinVolumeMl"))
         .unwrap_or(1000.0);
 
+    let target_temperature = material
+        .and_then(|m| get_f32(m, "targetTemperatureC"))
+        .unwrap_or(25.0);
+
+    let intelligent_release = !twostage
+        && material
+            .and_then(|m| get_bool(m, "intelligentRelease"))
+            .unwrap_or(false);
+
     AfzBuildModel {
         machine_name,
         display_width_mm: display_width,
@@ -391,5 +412,7 @@ pub(super) fn parse_afz_build_model(job: &SliceJobV3) -> AfzBuildModel {
         resin_resin_name,
         resin_film_name,
         resin_setting_name,
+        target_temperature,
+        intelligent_release,
     }
 }

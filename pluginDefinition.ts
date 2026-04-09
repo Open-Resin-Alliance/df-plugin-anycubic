@@ -6,31 +6,24 @@ import { ANYCUBIC_PLUGIN_MANIFEST } from './pluginManifest';
 import { ANYCUBIC_AFF_FORMAT_DEFINITION } from './slicing/affFormatDefinition';
 import { ANYCUBIC_AZF_FORMAT_DEFINITION } from './slicing/azfFormatDefinition';
 
-// ─── Local material settings adapter (shared by AZF and AFF) ────────
+// ─── Local material settings adapters (per mode) ─────────────────────
 
-const ANYCUBIC_MATERIAL_SETTINGS_BASE = {
+const ANYCUBIC_SIMPLE_SETTINGS_BASE = {
   displayName: 'Anycubic Resin Settings',
   replacesDefaultMaterialSettings: true,
   tabs: [
     { id: 'simple', title: 'Simple', order: 10 },
-    { id: 'twostage', title: 'Advanced', order: 20 },
   ],
   sections: [
     { id: 'layers-exposure', title: 'Layers and Exposure', tabId: 'simple', order: 10 },
     { id: 'print-control', title: 'Print Control', tabId: 'simple', order: 20 },
-    { id: 'layers-exposure-ts', title: 'Layers and Exposure', tabId: 'twostage', order: 10 },
-    { id: 'normal-layers', title: 'Normal Layers Control', tabId: 'twostage', order: 20 },
-    { id: 'bottom-layers', title: 'Bottom Layers Control', tabId: 'twostage', order: 30 },
   ],
   cards: [
     { id: 'layers-exposure-card', title: 'Layers and Exposure', tabId: 'simple', sectionId: 'layers-exposure', order: 10 },
     { id: 'print-control-card', title: 'Print Control', tabId: 'simple', sectionId: 'print-control', order: 10 },
-    { id: 'layers-exposure-ts-card', title: 'Layers and Exposure', tabId: 'twostage', sectionId: 'layers-exposure-ts', order: 10 },
-    { id: 'normal-layers-card', title: 'Normal Layers Control', tabId: 'twostage', sectionId: 'normal-layers', order: 10 },
-    { id: 'bottom-layers-card', title: 'Bottom Layers Control', tabId: 'twostage', sectionId: 'bottom-layers', order: 10 },
   ],
   fields: [
-    // ── Layers and Exposure (simple tab) ──────────────────────────
+    // ── Layers and Exposure ──────────────────────────────────────────
     {
       key: 'layerHeightMm',
       label: 'Layer Thickness (mm)',
@@ -54,15 +47,15 @@ const ANYCUBIC_MATERIAL_SETTINGS_BASE = {
       metadataPath: 'material.normalExposureSec',
     },
     {
-      key: 'waitTimeBeforeCureSec',
-      label: 'Off Time (s)',
-      kind: 'number' as const,
-      defaultValue: 1.0,
+      key: 'bottomLayerCount',
+      label: 'Bottom Layers',
+      kind: 'integer' as const,
+      defaultValue: 5,
       min: 0,
-      max: 120,
-      step: 0.001,
+      max: 200,
+      step: 1,
       placement: { tabId: 'simple', sectionId: 'layers-exposure', cardId: 'layers-exposure-card', order: 30 },
-      metadataPath: 'material.waitTimeBeforeCureSec',
+      metadataPath: 'material.bottomLayerCount',
     },
     {
       key: 'bottomExposureSec',
@@ -76,17 +69,6 @@ const ANYCUBIC_MATERIAL_SETTINGS_BASE = {
       metadataPath: 'material.bottomExposureSec',
     },
     {
-      key: 'bottomLayerCount',
-      label: 'Bottom Layers',
-      kind: 'integer' as const,
-      defaultValue: 5,
-      min: 0,
-      max: 200,
-      step: 1,
-      placement: { tabId: 'simple', sectionId: 'layers-exposure', cardId: 'layers-exposure-card', order: 50 },
-      metadataPath: 'material.bottomLayerCount',
-    },
-    {
       key: 'transitionLayerCount',
       label: 'Transition Layer Count',
       kind: 'integer' as const,
@@ -94,11 +76,22 @@ const ANYCUBIC_MATERIAL_SETTINGS_BASE = {
       min: 0,
       max: 100000,
       step: 1,
-      placement: { tabId: 'simple', sectionId: 'layers-exposure', cardId: 'layers-exposure-card', order: 60 },
+      placement: { tabId: 'simple', sectionId: 'layers-exposure', cardId: 'layers-exposure-card', order: 50 },
       metadataPath: 'material.transitionLayerCount',
     },
+    {
+      key: 'waitTimeBeforeCureSec',
+      label: 'Off Time (s)',
+      kind: 'number' as const,
+      defaultValue: 1.0,
+      min: 0,
+      max: 120,
+      step: 0.001,
+      placement: { tabId: 'simple', sectionId: 'layers-exposure', cardId: 'layers-exposure-card', order: 60 },
+      metadataPath: 'material.waitTimeBeforeCureSec',
+    },
 
-    // ── Print Control (simple tab) ────────────────────────────────
+    // ── Print Control ────────────────────────────────────────────────
     {
       key: 'liftDistanceMm',
       label: 'Z Lift Distance (mm)',
@@ -132,8 +125,46 @@ const ANYCUBIC_MATERIAL_SETTINGS_BASE = {
       placement: { tabId: 'simple', sectionId: 'print-control', cardId: 'print-control-card', order: 30 },
       metadataPath: 'material.retractSpeedMmMin',
     },
+    {
+      key: 'intelligentRelease',
+      label: 'Intelligent Release',
+      kind: 'boolean' as const,
+      defaultValue: false,
+      placement: { tabId: 'simple', sectionId: 'print-control', cardId: 'print-control-card', order: 40 },
+      metadataPath: 'material.intelligentRelease',
+    },
+    {
+      key: 'targetTemperatureC',
+      label: 'Target Temperature (°C)',
+      kind: 'number' as const,
+      defaultValue: 25,
+      min: 0,
+      max: 100,
+      step: 1,
+      placement: { tabId: 'simple', sectionId: 'print-control', cardId: 'print-control-card', order: 50 },
+      metadataPath: 'material.targetTemperatureC',
+    },
+  ],
+} as const;
 
-    // ── Layers and Exposure (twostage tab, same fields) ──────────
+const ANYCUBIC_TWOSTAGE_SETTINGS_BASE = {
+  displayName: 'Anycubic Resin Settings',
+  replacesDefaultMaterialSettings: true,
+  tabs: [
+    { id: 'twostage', title: 'Advanced', order: 10 },
+  ],
+  sections: [
+    { id: 'layers-exposure-ts', title: 'Layers and Exposure', tabId: 'twostage', order: 10 },
+    { id: 'normal-layers', title: 'Normal Layers Control', tabId: 'twostage', order: 20 },
+    { id: 'bottom-layers', title: 'Bottom Layers Control', tabId: 'twostage', order: 30 },
+  ],
+  cards: [
+    { id: 'layers-exposure-ts-card', title: 'Layers and Exposure', tabId: 'twostage', sectionId: 'layers-exposure-ts', order: 10 },
+    { id: 'normal-layers-card', title: 'Normal Layers Control', tabId: 'twostage', sectionId: 'normal-layers', order: 10 },
+    { id: 'bottom-layers-card', title: 'Bottom Layers Control', tabId: 'twostage', sectionId: 'bottom-layers', order: 10 },
+  ],
+  fields: [
+    // ── Layers and Exposure ──────────────────────────────────────────
     {
       key: 'layerHeightMm',
       label: 'Layer Thickness (mm)',
@@ -201,13 +232,14 @@ const ANYCUBIC_MATERIAL_SETTINGS_BASE = {
       metadataPath: 'material.transitionLayerCount',
     },
 
-    // ── Normal Layers Control (twostage tab) ─────────────────────
+    // ── Normal Layers Control ────────────────────────────────────────
     {
       key: 'liftDistanceMm',
       label: 'Z Lift Distance (mm)',
       kind: 'number' as const,
       defaultValue: 3.0,
       splitWithKey: 'liftDistance2Mm',
+      tag: 'Slow',
       min: 0,
       max: 50,
       step: 0.001,
@@ -219,6 +251,7 @@ const ANYCUBIC_MATERIAL_SETTINGS_BASE = {
       label: 'Z Lift Distance Step 2 (mm)',
       kind: 'number' as const,
       defaultValue: 5.0,
+      tag: 'Fast',
       min: 0,
       max: 50,
       step: 0.001,
@@ -231,6 +264,7 @@ const ANYCUBIC_MATERIAL_SETTINGS_BASE = {
       kind: 'number' as const,
       defaultValue: 120,
       splitWithKey: 'liftSpeed2MmMin',
+      tag: 'Slow',
       min: 0,
       max: 100000,
       step: 1,
@@ -242,6 +276,7 @@ const ANYCUBIC_MATERIAL_SETTINGS_BASE = {
       label: 'Z Lift Speed Step 2 (mm/min)',
       kind: 'number' as const,
       defaultValue: 360,
+      tag: 'Fast',
       min: 0,
       max: 100000,
       step: 1,
@@ -254,6 +289,7 @@ const ANYCUBIC_MATERIAL_SETTINGS_BASE = {
       kind: 'number' as const,
       defaultValue: 360,
       splitWithKey: 'retractSpeedMmMin',
+      tag: 'Fast',
       min: 0,
       max: 100000,
       step: 1,
@@ -265,6 +301,7 @@ const ANYCUBIC_MATERIAL_SETTINGS_BASE = {
       label: 'Z Retract Speed Step 2 (mm/min)',
       kind: 'number' as const,
       defaultValue: 120,
+      tag: 'Slow',
       min: 0,
       max: 100000,
       step: 1,
@@ -272,13 +309,14 @@ const ANYCUBIC_MATERIAL_SETTINGS_BASE = {
       metadataPath: 'material.retractSpeedMmMin',
     },
 
-    // ── Bottom Layers Control (twostage tab) ─────────────────────
+    // ── Bottom Layers Control ────────────────────────────────────────
     {
       key: 'bottomLiftDistanceMm',
       label: 'Z Lift Distance (mm)',
       kind: 'number' as const,
       defaultValue: 5.0,
       splitWithKey: 'bottomLiftDistance2Mm',
+      tag: 'Slow',
       min: 0,
       max: 50,
       step: 0.001,
@@ -290,6 +328,7 @@ const ANYCUBIC_MATERIAL_SETTINGS_BASE = {
       label: 'Z Lift Distance Step 2 (mm)',
       kind: 'number' as const,
       defaultValue: 3.0,
+      tag: 'Fast',
       min: 0,
       max: 50,
       step: 0.001,
@@ -302,6 +341,7 @@ const ANYCUBIC_MATERIAL_SETTINGS_BASE = {
       kind: 'number' as const,
       defaultValue: 120,
       splitWithKey: 'bottomLiftSpeed2MmMin',
+      tag: 'Slow',
       min: 0,
       max: 100000,
       step: 1,
@@ -313,6 +353,7 @@ const ANYCUBIC_MATERIAL_SETTINGS_BASE = {
       label: 'Z Lift Speed Step 2 (mm/min)',
       kind: 'number' as const,
       defaultValue: 180,
+      tag: 'Fast',
       min: 0,
       max: 100000,
       step: 1,
@@ -325,6 +366,7 @@ const ANYCUBIC_MATERIAL_SETTINGS_BASE = {
       kind: 'number' as const,
       defaultValue: 240,
       splitWithKey: 'bottomRetractSpeedMmMin',
+      tag: 'Fast',
       min: 0,
       max: 100000,
       step: 1,
@@ -336,24 +378,81 @@ const ANYCUBIC_MATERIAL_SETTINGS_BASE = {
       label: 'Z Retract Speed Step 2 (mm/min)',
       kind: 'number' as const,
       defaultValue: 180,
+      tag: 'Slow',
       min: 0,
       max: 100000,
       step: 1,
       placement: { tabId: 'twostage', sectionId: 'bottom-layers', cardId: 'bottom-layers-card', order: 31 },
       metadataPath: 'material.bottomRetractSpeedMmMin',
     },
+
+    // ── Additional Print Control ─────────────────────────────────────
+    {
+      key: 'targetTemperatureC',
+      label: 'Target Temperature (°C)',
+      kind: 'number' as const,
+      defaultValue: 25,
+      min: 0,
+      max: 100,
+      step: 1,
+      placement: { tabId: 'twostage', sectionId: 'layers-exposure-ts', cardId: 'layers-exposure-ts-card', order: 70 },
+      metadataPath: 'material.targetTemperatureC',
+    },
   ],
 } as const;
 
-const ANYCUBIC_AZF_MATERIAL_SETTINGS: PluginLocalMaterialSettingsAdapterContract = {
+// ─── Per-format adapters (keyed by mode) ─────────────────────────────
+
+function withoutField(
+  base: typeof ANYCUBIC_SIMPLE_SETTINGS_BASE | typeof ANYCUBIC_TWOSTAGE_SETTINGS_BASE,
+  fieldKey: string,
+) {
+  return { ...base, fields: base.fields.filter((f) => f.key !== fieldKey) };
+}
+
+const ANYCUBIC_AZF_SIMPLE: PluginLocalMaterialSettingsAdapterContract = {
   outputFormat: ANYCUBIC_AZF_FORMAT_DEFINITION.outputFormat,
-  ...ANYCUBIC_MATERIAL_SETTINGS_BASE,
+  ...ANYCUBIC_SIMPLE_SETTINGS_BASE,
 };
 
-const ANYCUBIC_AFF_MATERIAL_SETTINGS: PluginLocalMaterialSettingsAdapterContract = {
-  outputFormat: ANYCUBIC_AFF_FORMAT_DEFINITION.outputFormat,
-  ...ANYCUBIC_MATERIAL_SETTINGS_BASE,
+const ANYCUBIC_AZF_SIMPLE_NO_TEMP: PluginLocalMaterialSettingsAdapterContract = {
+  outputFormat: ANYCUBIC_AZF_FORMAT_DEFINITION.outputFormat,
+  ...withoutField(ANYCUBIC_SIMPLE_SETTINGS_BASE, 'targetTemperatureC'),
 };
+
+const ANYCUBIC_AZF_TWOSTAGE: PluginLocalMaterialSettingsAdapterContract = {
+  outputFormat: ANYCUBIC_AZF_FORMAT_DEFINITION.outputFormat,
+  ...ANYCUBIC_TWOSTAGE_SETTINGS_BASE,
+};
+
+const ANYCUBIC_AZF_TWOSTAGE_NO_TEMP: PluginLocalMaterialSettingsAdapterContract = {
+  outputFormat: ANYCUBIC_AZF_FORMAT_DEFINITION.outputFormat,
+  ...withoutField(ANYCUBIC_TWOSTAGE_SETTINGS_BASE, 'targetTemperatureC'),
+};
+
+const ANYCUBIC_AFF_SIMPLE: PluginLocalMaterialSettingsAdapterContract = {
+  outputFormat: ANYCUBIC_AFF_FORMAT_DEFINITION.outputFormat,
+  ...ANYCUBIC_SIMPLE_SETTINGS_BASE,
+};
+
+const ANYCUBIC_AFF_TWOSTAGE: PluginLocalMaterialSettingsAdapterContract = {
+  outputFormat: ANYCUBIC_AFF_FORMAT_DEFINITION.outputFormat,
+  ...ANYCUBIC_TWOSTAGE_SETTINGS_BASE,
+};
+
+// ─── Extension → mode map helpers ────────────────────────────────────
+
+function azfModeMap() {
+  return { simple: ANYCUBIC_AZF_SIMPLE, twostage: ANYCUBIC_AZF_TWOSTAGE };
+}
+
+function azfModeMapNoTemp() {
+  return { simple: ANYCUBIC_AZF_SIMPLE_NO_TEMP, twostage: ANYCUBIC_AZF_TWOSTAGE_NO_TEMP };
+}
+
+function affModeMap() {
+  return { simple: ANYCUBIC_AFF_SIMPLE, twostage: ANYCUBIC_AFF_TWOSTAGE };
+}
 
 // ─── Plugin definition ──────────────────────────────────────────────
 
@@ -396,35 +495,35 @@ export const ANYCUBIC_COMPLEX_PLUGIN_DEFINITION: ComplexPluginDefinition = {
     '.pm7m': ANYCUBIC_AZF_FORMAT_DEFINITION,
     '.pwsz': ANYCUBIC_AZF_FORMAT_DEFINITION,
   },
-  localMaterialSettingsByOutput: {
+  localMaterialSettingsByOutputAndMode: {
     // AFF extensions
-    '.pws': ANYCUBIC_AFF_MATERIAL_SETTINGS,
-    '.pw0': ANYCUBIC_AFF_MATERIAL_SETTINGS,
-    '.pwx': ANYCUBIC_AFF_MATERIAL_SETTINGS,
-    '.dlp': ANYCUBIC_AFF_MATERIAL_SETTINGS,
-    '.dl2p': ANYCUBIC_AFF_MATERIAL_SETTINGS,
-    '.pwmx': ANYCUBIC_AFF_MATERIAL_SETTINGS,
-    '.pmx2': ANYCUBIC_AFF_MATERIAL_SETTINGS,
-    '.pwmb': ANYCUBIC_AFF_MATERIAL_SETTINGS,
-    '.px6s': ANYCUBIC_AFF_MATERIAL_SETTINGS,
-    '.pwmo': ANYCUBIC_AFF_MATERIAL_SETTINGS,
-    '.pm3n': ANYCUBIC_AFF_MATERIAL_SETTINGS,
-    '.pm4n': ANYCUBIC_AFF_MATERIAL_SETTINGS,
-    '.pwms': ANYCUBIC_AFF_MATERIAL_SETTINGS,
-    '.pwma': ANYCUBIC_AFF_MATERIAL_SETTINGS,
-    '.pmsq': ANYCUBIC_AFF_MATERIAL_SETTINGS,
-    '.pm3': ANYCUBIC_AFF_MATERIAL_SETTINGS,
-    '.pm3m': ANYCUBIC_AFF_MATERIAL_SETTINGS,
-    '.pm3r': ANYCUBIC_AFF_MATERIAL_SETTINGS,
-    '.pm5': ANYCUBIC_AFF_MATERIAL_SETTINGS,
-    '.pm5s': ANYCUBIC_AFF_MATERIAL_SETTINGS,
-    '.m5sp': ANYCUBIC_AFF_MATERIAL_SETTINGS,
-    '.pwc': ANYCUBIC_AFF_MATERIAL_SETTINGS,
+    '.pws': affModeMap(),
+    '.pw0': affModeMap(),
+    '.pwx': affModeMap(),
+    '.dlp': affModeMap(),
+    '.dl2p': affModeMap(),
+    '.pwmx': affModeMap(),
+    '.pmx2': affModeMap(),
+    '.pwmb': affModeMap(),
+    '.px6s': affModeMap(),
+    '.pwmo': affModeMap(),
+    '.pm3n': affModeMap(),
+    '.pm4n': affModeMap(),
+    '.pwms': affModeMap(),
+    '.pwma': affModeMap(),
+    '.pmsq': affModeMap(),
+    '.pm3': affModeMap(),
+    '.pm3m': affModeMap(),
+    '.pm3r': affModeMap(),
+    '.pm5': affModeMap(),
+    '.pm5s': affModeMap(),
+    '.m5sp': affModeMap(),
+    '.pwc': affModeMap(),
     // AZF extensions
-    '.pm4u': ANYCUBIC_AZF_MATERIAL_SETTINGS,
-    '.pm7': ANYCUBIC_AZF_MATERIAL_SETTINGS,
-    '.pm7m': ANYCUBIC_AZF_MATERIAL_SETTINGS,
-    '.pwsz': ANYCUBIC_AZF_MATERIAL_SETTINGS,
+    '.pm4u': azfModeMapNoTemp(),
+    '.pm7': azfModeMap(),
+    '.pm7m': azfModeMap(),
+    '.pwsz': azfModeMapNoTemp(),
   },
 };
 
