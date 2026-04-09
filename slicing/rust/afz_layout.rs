@@ -11,7 +11,7 @@
 //! - `layer_images/layer_N.pw0Img` — PW0 RLE encoded layer images
 
 use crate::engine::SlicerV3Error;
-use crate::types::SliceJobV3;
+use crate::types::{LayerAreaStatsV3, SliceJobV3};
 
 use super::afz_metadata::{AfzBuildModel, AfzMachineProfile, AfzTimingModel};
 use super::afz_preview;
@@ -47,6 +47,7 @@ pub(super) fn build_afz_container(
     build: &AfzBuildModel,
     profile: &AfzMachineProfile,
     layers: &[AfzPreparedLayer],
+    layer_area_stats: &[LayerAreaStatsV3],
     on_progress: Option<&dyn Fn(u32, u32)>,
 ) -> Result<Vec<u8>, SlicerV3Error> {
     let total_steps = (layers.len() as u32) + 4; // layers + manifests + scene + previews + done
@@ -88,7 +89,7 @@ pub(super) fn build_afz_container(
     zip.write_all(settings_json.as_bytes())?;
 
     // 2. Print info
-    let print_info_json = build_print_info_json(job, timing, build, layers);
+    let print_info_json = build_print_info_json(job, timing, build, layers, layer_area_stats);
     zip.start_file(PRINT_INFO_FILE, options)?;
     zip.write_all(print_info_json.as_bytes())?;
 
@@ -132,7 +133,7 @@ pub(super) fn build_afz_container(
     }
 
     // 8. Scene binary (last entry)
-    let scene = build_scene_binary(job, timing, build, layers);
+    let scene = build_scene_binary(job, timing, build, layers, layer_area_stats);
     zip.start_file(SCENE_FILE, options)?;
     zip.write_all(&scene)?;
 
@@ -437,6 +438,7 @@ fn build_print_info_json(
     timing: &AfzTimingModel,
     build: &AfzBuildModel,
     layers: &[AfzPreparedLayer],
+    layer_area_stats: &[LayerAreaStatsV3],
 ) -> String {
     // Pixel area in mm²
     let pixel_area_mm2 = (build.display_width_mm / job.source_width_px as f32)
@@ -445,7 +447,11 @@ fn build_print_info_json(
     // Volume: sum of non-zero pixels × pixel area × layer height, converted mm³ → ml
     let total_volume_mm3: f32 = layers
         .iter()
-        .map(|l| l.non_zero_pixel_count as f32 * pixel_area_mm2 * timing.layer_height_mm)
+        .map(|l| {
+            layer_solid_pixel_count(layers, layer_area_stats, l.index) as f32
+                * pixel_area_mm2
+                * timing.layer_height_mm
+        })
         .sum();
     let volume_ml = total_volume_mm3 / 1000.0;
 
@@ -577,6 +583,7 @@ fn build_scene_binary(
     timing: &AfzTimingModel,
     build: &AfzBuildModel,
     layers: &[AfzPreparedLayer],
+    layer_area_stats: &[LayerAreaStatsV3],
 ) -> Vec<u8> {
     let layer_count = layers.len() as u32;
     let print_height = timing.layer_height_mm * layer_count as f32;
@@ -628,13 +635,14 @@ fn build_scene_binary(
     let mut pos_z: f32 = 0.0;
     for layer in layers {
         pos_z += timing.layer_height_mm;
+        let solid_pixels = layer_solid_pixel_count(layers, layer_area_stats, layer.index);
 
         write_f32_le(&mut out, pos_z); // Height (absolute Z)
 
         // Area — we don't have contour data, so estimate from non-zero pixel count
         let pixel_area_mm2 = (build.display_width_mm / job.source_width_px as f32)
             * (build.display_height_mm / job.source_height_px as f32);
-        let area = layer.non_zero_pixel_count as f32 * pixel_area_mm2;
+        let area = solid_pixels as f32 * pixel_area_mm2;
         write_f32_le(&mut out, area);
 
         // Bounding rect offsets from centre (conservative: full display)
@@ -644,7 +652,7 @@ fn build_scene_binary(
         write_f32_le(&mut out, half_h);
 
         // ObjectCount — we don't track contours, default to 1 if layer has content
-        let object_count = if layer.non_zero_pixel_count > 0 { 1u32 } else { 0 };
+        let object_count = if solid_pixels > 0 { 1u32 } else { 0 };
         write_u32_le(&mut out, object_count);
 
         // MaxContourArea — same as total area as approximation
@@ -660,6 +668,23 @@ fn build_scene_binary(
     out.extend_from_slice(b"--->");
 
     out
+}
+
+fn layer_solid_pixel_count(
+    layers: &[AfzPreparedLayer],
+    layer_area_stats: &[LayerAreaStatsV3],
+    layer_index: usize,
+) -> u32 {
+    layer_area_stats
+        .get(layer_index)
+        .map(|stats| stats.total_solid_pixels)
+        .or_else(|| {
+            layers
+                .iter()
+                .find(|layer| layer.index == layer_index)
+                .map(|layer| layer.non_zero_pixel_count)
+        })
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -689,6 +714,7 @@ mod tests {
             mirror_y: false,
             triangles_xyz: vec![],
             metadata_json: "{}".to_string(),
+            x_packing_mode: "none".to_string(),
         }
     }
 
@@ -703,7 +729,7 @@ mod tests {
             non_zero_pixel_count: 0,
         }];
 
-        let scene = build_scene_binary(&job, &timing, &build, &layers);
+        let scene = build_scene_binary(&job, &timing, &build, &layers, &[]);
 
         // Check magic
         assert_eq!(&scene[0..14], b"ANYCUBIC-PWSZ\0");
@@ -739,8 +765,8 @@ mod tests {
         ];
 
         let profile = super::super::afz_metadata::machine_profile_for_suffix(&build.key_suffix);
-        let bytes =
-            build_afz_container(&job, &timing, &build, profile, &layers, None).expect("should build");
+        let bytes = build_afz_container(&job, &timing, &build, profile, &layers, &[], None)
+            .expect("should build");
 
         // Verify it's a valid ZIP
         let cursor = Cursor::new(&bytes);
