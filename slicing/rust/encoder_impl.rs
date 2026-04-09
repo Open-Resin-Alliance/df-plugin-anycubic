@@ -9,7 +9,7 @@ mod afz_metadata;
 mod afz_preview;
 mod afz_pw0;
 
-use crate::encoders::{FormatEncoder, RawMaskStreamEncoder};
+use crate::encoders::{FormatEncoder, RawMaskStreamEncoder, RleStreamEncoder};
 use crate::engine::SlicerV3Error;
 use crate::types::{LayerAreaStatsV3, RenderedLayersV3, SliceJobV3};
 
@@ -19,6 +19,7 @@ use afz_metadata::{machine_profile_for_suffix, parse_afz_build_model, parse_afz_
 use crossbeam_channel::bounded;
 use std::path::Path;
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 
 pub struct AffPluginEncoder;
@@ -125,6 +126,20 @@ fn encode_single_afz_empty_layer(index: usize, pixel_count: usize) -> AfzPrepare
     }
 }
 
+/// PW0-encode a single rasterized RLE layer without expanding to a raw mask.
+fn encode_single_afz_rle_layer(
+    index: usize,
+    runs: &[crate::rle::RleRun],
+    pixel_count: usize,
+) -> AfzPreparedLayer {
+    let encoded = afz_pw0::encode_pw0_from_rle(runs, pixel_count);
+    AfzPreparedLayer {
+        index,
+        encoded,
+        non_zero_pixel_count: 0,
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  AZF streaming encoder (multi-threaded)
 // ═══════════════════════════════════════════════════════════════════
@@ -135,6 +150,13 @@ struct AzfStreamEncoder {
     result_rx: mpsc::Receiver<Result<AfzPreparedLayer, SlicerV3Error>>,
     workers: Vec<thread::JoinHandle<()>>,
     consumed_layers: u32,
+}
+
+struct AzfRleStreamEncoder {
+    job: SliceJobV3,
+    total_pixels: usize,
+    prepared: Vec<AfzPreparedLayer>,
+    area_stats: Vec<LayerAreaStatsV3>,
 }
 
 impl RawMaskStreamEncoder for AzfStreamEncoder {
@@ -220,13 +242,93 @@ impl RawMaskStreamEncoder for AzfStreamEncoder {
         let build = parse_afz_build_model(&self.job);
         let profile = machine_profile_for_suffix(&build.key_suffix);
 
-        build_afz_container(&self.job, &timing, &build, profile, &prepared, None)
+        let fallback_stats = prepared
+            .iter()
+            .map(|layer| LayerAreaStatsV3 {
+                total_solid_pixels: layer.non_zero_pixel_count,
+                ..LayerAreaStatsV3::default()
+            })
+            .collect::<Vec<_>>();
+
+        build_afz_container(
+            &self.job,
+            &timing,
+            &build,
+            profile,
+            &prepared,
+            &fallback_stats,
+            None,
+        )
     }
 
     fn finalize_to_path(self: Box<Self>, output_path: &Path) -> Result<(), SlicerV3Error> {
         let bytes = self.finalize_to_bytes()?;
         std::fs::write(output_path, bytes)?;
         Ok(())
+    }
+}
+
+impl RleStreamEncoder for AzfRleStreamEncoder {
+    fn consume_rle_layer(
+        &mut self,
+        layer_index: u32,
+        runs: Vec<crate::rle::RleRun>,
+    ) -> Result<(), SlicerV3Error> {
+        self.prepared.push(encode_single_afz_rle_layer(
+            layer_index as usize,
+            &runs,
+            self.total_pixels,
+        ));
+        Ok(())
+    }
+
+    fn set_area_stats(&mut self, stats: Vec<LayerAreaStatsV3>) {
+        self.area_stats = stats;
+    }
+
+    fn parallel_encode_fn(
+        &self,
+    ) -> Option<
+        Arc<dyn Fn(u32, &[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync>,
+    > {
+        let total_pixels = self.total_pixels;
+        Some(Arc::new(
+            move |_layer_index: u32, runs: &[crate::rle::RleRun]| {
+                Ok(afz_pw0::encode_pw0_from_rle(runs, total_pixels))
+            },
+        ))
+    }
+
+    fn store_encoded_layer(&mut self, layer_index: u32, bytes: Vec<u8>) {
+        self.prepared.push(AfzPreparedLayer {
+            index: layer_index as usize,
+            encoded: bytes,
+            non_zero_pixel_count: 0,
+        });
+    }
+
+    fn finalize_to_bytes(mut self: Box<Self>) -> Result<Vec<u8>, SlicerV3Error> {
+        if self.prepared.is_empty() {
+            return Err(SlicerV3Error::MissingRenderedLayerPayload(
+                "no rendered layers were provided for AFZ RLE encoding".to_string(),
+            ));
+        }
+
+        self.prepared.sort_unstable_by_key(|layer| layer.index);
+
+        let timing = parse_afz_timing_model(&self.job);
+        let build = parse_afz_build_model(&self.job);
+        let profile = machine_profile_for_suffix(&build.key_suffix);
+
+        build_afz_container(
+            &self.job,
+            &timing,
+            &build,
+            profile,
+            &self.prepared,
+            &self.area_stats,
+            None,
+        )
     }
 }
 
@@ -319,11 +421,25 @@ impl FormatEncoder for AzfPluginEncoder {
         })))
     }
 
+    fn create_rle_stream_encoder(
+        &self,
+        job: &SliceJobV3,
+    ) -> Result<Option<Box<dyn RleStreamEncoder>>, SlicerV3Error> {
+        let total_pixels =
+            (job.source_width_px as usize).saturating_mul(job.source_height_px as usize);
+        Ok(Some(Box::new(AzfRleStreamEncoder {
+            job: job.clone(),
+            total_pixels,
+            prepared: Vec::with_capacity(job.total_layers as usize),
+            area_stats: vec![LayerAreaStatsV3::default(); job.total_layers as usize],
+        })))
+    }
+
     fn encode_container_from_rendered_layers(
         &self,
         job: &SliceJobV3,
         rendered_layers: &RenderedLayersV3,
-        _layer_area_stats: &[LayerAreaStatsV3],
+        layer_area_stats: &[LayerAreaStatsV3],
     ) -> Result<Vec<u8>, SlicerV3Error> {
         let Some(raw_masks) = rendered_layers.raw_mask_layers.as_ref() else {
             return Err(SlicerV3Error::MissingRenderedLayerPayload(
@@ -358,7 +474,7 @@ impl FormatEncoder for AzfPluginEncoder {
         let build = parse_afz_build_model(job);
         let profile = machine_profile_for_suffix(&build.key_suffix);
 
-        build_afz_container(job, &timing, &build, profile, &prepared, None)
+        build_afz_container(job, &timing, &build, profile, &prepared, layer_area_stats, None)
     }
 
     fn encode_container_to_path(
