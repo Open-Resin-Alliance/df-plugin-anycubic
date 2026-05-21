@@ -53,6 +53,44 @@ pub(super) fn encode_pw0(mask: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Decode PW0 RLE bytes back into a flat 8-bit greyscale pixel buffer of
+/// length `expected_pixels`. Quantisation is 4-bit, so the original 0..255
+/// range is reconstructed by nibble-doubling (`(colour << 4) | colour`),
+/// matching the convention used for HTML colour shorthand expansion.
+pub(super) fn decode_pw0(data: &[u8], expected_pixels: usize) -> Vec<u8> {
+    let mut pixels = Vec::with_capacity(expected_pixels);
+    let mut i = 0;
+
+    while i < data.len() && pixels.len() < expected_pixels {
+        let b0 = data[i];
+        i += 1;
+        let colour = b0 >> 4;
+
+        let repeat: u32 = if colour == 0x0 || colour == 0xF {
+            // 2-byte big-endian long-run encoding
+            if i >= data.len() {
+                break;
+            }
+            let b1 = data[i];
+            i += 1;
+            (((b0 & 0x0F) as u32) << 8) | (b1 as u32)
+        } else {
+            // 1-byte short-run encoding (grey 0x1..0xE), max 15 reps
+            (b0 & 0x0F) as u32
+        };
+
+        let value = (colour << 4) | colour;
+        let remaining = expected_pixels - pixels.len();
+        let fill = (repeat as usize).min(remaining);
+        for _ in 0..fill {
+            pixels.push(value);
+        }
+    }
+
+    pixels.resize(expected_pixels, 0);
+    pixels
+}
+
 /// Encode rasterized row-major RLE runs directly into PW0 bytes.
 pub(super) fn encode_pw0_from_rle(
     runs: &[crate::rle::RleRun],
@@ -191,5 +229,57 @@ mod tests {
         }];
         let encoded = encode_pw0_from_rle(&runs, 5);
         assert_eq!(encoded, vec![0xF0, 3, 0x00, 2]);
+    }
+
+    #[test]
+    fn decode_round_trips_all_black() {
+        let encoded = encode_pw0(&vec![0u8; 100]);
+        assert_eq!(decode_pw0(&encoded, 100), vec![0u8; 100]);
+    }
+
+    #[test]
+    fn decode_round_trips_all_white() {
+        // 0xFF quantises to colour 0xF, nibble-doubled back to 0xFF.
+        let encoded = encode_pw0(&vec![0xFFu8; 100]);
+        assert_eq!(decode_pw0(&encoded, 100), vec![0xFFu8; 100]);
+    }
+
+    #[test]
+    fn decode_round_trips_grey_runs_above_15() {
+        // Grey 0x88 round-trips exactly under nibble-doubling.
+        let mask = vec![0x88u8; 50];
+        let encoded = encode_pw0(&mask);
+        assert_eq!(decode_pw0(&encoded, 50), mask);
+    }
+
+    #[test]
+    fn decode_round_trips_mixed_palette() {
+        // Each value has low_nibble == high_nibble so quantisation is lossless.
+        let mask = vec![0x00, 0x00, 0x88, 0x88, 0x88, 0xFF, 0xFF, 0x00, 0x00];
+        let encoded = encode_pw0(&mask);
+        assert_eq!(decode_pw0(&encoded, mask.len()), mask);
+    }
+
+    #[test]
+    fn decode_round_trips_long_run_above_4095() {
+        let mask = vec![0u8; 5000];
+        let encoded = encode_pw0(&mask);
+        assert_eq!(decode_pw0(&encoded, 5000), mask);
+    }
+
+    #[test]
+    fn decode_pads_short_input_with_black() {
+        // Encoded buffer covers fewer pixels than requested.
+        let encoded = vec![0xF0, 3]; // 3 white pixels
+        let pixels = decode_pw0(&encoded, 5);
+        assert_eq!(pixels, vec![0xFF, 0xFF, 0xFF, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn decode_truncates_overlong_input() {
+        // Encoded run claims 10 pixels but caller only wants 3.
+        let encoded = vec![0xF0, 10];
+        let pixels = decode_pw0(&encoded, 3);
+        assert_eq!(pixels, vec![0xFF, 0xFF, 0xFF]);
     }
 }

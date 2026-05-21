@@ -489,4 +489,97 @@ impl FormatEncoder for AzfPluginEncoder {
         std::fs::write(output_path, bytes)?;
         Ok(())
     }
+
+    fn read_layer_preview_png(
+        &self,
+        path: &Path,
+        layer_number: u32,
+    ) -> Result<Vec<u8>, SlicerV3Error> {
+        self::read_layer_preview_png(path, layer_number).map_err(SlicerV3Error::LayerPreview)
+    }
+}
+
+/// Reads a single layer preview PNG from an AFZ (Anycubic Zip Format) file.
+/// `layer_number` is 1-based.
+pub fn read_layer_preview_png(path: &Path, layer_number: u32) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+
+    if layer_number == 0 {
+        return Err("Layer number must be >= 1".to_string());
+    }
+
+    let file = std::fs::File::open(path).map_err(|e| format!("Failed opening AFZ file: {e}"))?;
+    let mut zip =
+        zip::ZipArchive::new(file).map_err(|e| format!("Failed reading AFZ zip: {e}"))?;
+
+    // Read settings JSON for canvas dimensions.
+    let (width_px, height_px) = {
+        let mut entry = zip
+            .by_name("anycubic_photon_resins.pwsp")
+            .map_err(|e| format!("AFZ settings file missing: {e}"))?;
+        let mut json_str = String::new();
+        entry
+            .read_to_string(&mut json_str)
+            .map_err(|e| format!("AFZ settings read failed: {e}"))?;
+        let value: serde_json::Value = serde_json::from_str(&json_str)
+            .map_err(|e| format!("AFZ settings JSON parse failed: {e}"))?;
+        let machine = value
+            .get("machine_type")
+            .ok_or_else(|| "AFZ settings missing machine_type".to_string())?;
+        let w = machine
+            .get("res_x")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| "AFZ settings missing machine_type.res_x".to_string())?
+            as u32;
+        let h = machine
+            .get("res_y")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| "AFZ settings missing machine_type.res_y".to_string())?
+            as u32;
+        (w, h)
+    };
+
+    if width_px == 0 || height_px == 0 {
+        return Err(format!(
+            "AFZ file reports invalid dimensions {width_px}×{height_px}"
+        ));
+    }
+
+    let layer_index = layer_number - 1;
+    let layer_name = format!("layer_images/layer_{}.pw0Img", layer_index);
+
+    let mut rle_bytes = Vec::new();
+    {
+        let mut entry = zip.by_name(&layer_name).map_err(|e| {
+            format!("AFZ layer {layer_number} not found ({layer_name}): {e}")
+        })?;
+        rle_bytes.reserve(entry.size() as usize);
+        entry
+            .read_to_end(&mut rle_bytes)
+            .map_err(|e| format!("AFZ layer {layer_number} read failed: {e}"))?;
+    }
+
+    let expected_pixels = width_px as usize * height_px as usize;
+    let pixels = afz_pw0::decode_pw0(&rle_bytes, expected_pixels);
+    encode_pixels_as_grayscale_png(width_px, height_px, &pixels)
+}
+
+/// Encodes a flat 8-bit grayscale pixel buffer as a PNG.
+fn encode_pixels_as_grayscale_png(
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    let mut encoder = png::Encoder::new(&mut out, width, height);
+    encoder.set_color(png::ColorType::Grayscale);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder
+        .write_header()
+        .map_err(|e| format!("AFZ PNG header write failed: {e}"))?;
+    writer
+        .write_image_data(pixels)
+        .map_err(|e| format!("AFZ PNG data write failed: {e}"))?;
+    drop(writer);
+    Ok(out)
 }
