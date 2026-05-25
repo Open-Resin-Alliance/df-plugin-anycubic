@@ -715,6 +715,7 @@ mod tests {
             triangles_xyz: vec![],
             metadata_json: "{}".to_string(),
             x_packing_mode: "none".to_string(),
+            ..Default::default()
         }
     }
 
