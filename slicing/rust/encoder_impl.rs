@@ -38,7 +38,7 @@ pub fn create_plugin_encoder() -> Vec<Box<dyn FormatEncoder>> {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  AFF (stub)
+//  AFF FormatEncoder trait impl
 // ═══════════════════════════════════════════════════════════════════
 
 impl FormatEncoder for AffPluginEncoder {
@@ -47,6 +47,8 @@ impl FormatEncoder for AffPluginEncoder {
     }
 
     fn requires_raw_mask_layers(&self) -> bool {
+        // Both streaming paths can produce the data they need; the engine
+        // calls create_rle_stream_encoder first.
         true
     }
 
@@ -54,16 +56,86 @@ impl FormatEncoder for AffPluginEncoder {
         false
     }
 
-    fn encode_container_from_rendered_layers(
+    fn requires_area_stats(&self) -> bool {
+        true // needed for NonZeroPixelCount + volume calculation
+    }
+
+    fn create_rle_stream_encoder(
         &self,
-        _job: &SliceJobV3,
-        _rendered_layers: &RenderedLayersV3,
-        _layer_area_stats: &[LayerAreaStatsV3],
-    ) -> Result<Vec<u8>, SlicerV3Error> {
-        // TODO: implement AFF encoding
-        Err(SlicerV3Error::MissingRenderedLayerPayload(
-            "AFF encoder not yet implemented".to_string(),
-        ))
+        job: &SliceJobV3,
+    ) -> Result<Option<Box<dyn RleStreamEncoder>>, SlicerV3Error> {
+        let build = parse_aff_build_model(job);
+        if aff_rle_format_for_suffix(&build.key_suffix) != AffRleFormat::Pw0 {
+            return Ok(None); // .pws goes through raw-mask path
+        }
+        let total_pixels =
+            (job.source_width_px as usize).saturating_mul(job.source_height_px as usize);
+        Ok(Some(Box::new(AffRleStreamEncoder {
+            job: job.clone(),
+            total_pixels,
+            prepared: Vec::with_capacity(job.total_layers as usize),
+        })))
+    }
+
+    fn create_raw_mask_stream_encoder(
+        &self,
+        job: &SliceJobV3,
+    ) -> Result<Option<Box<dyn RawMaskStreamEncoder>>, SlicerV3Error> {
+        let build = parse_aff_build_model(job);
+        if aff_rle_format_for_suffix(&build.key_suffix) != AffRleFormat::Pws {
+            return Ok(None); // PW0 extensions go through RLE path
+        }
+
+        let timing = parse_aff_timing_model(job);
+        let aa_level = timing.anti_alias_level as u8;
+        let expected_pixels =
+            (job.source_width_px as usize).saturating_mul(job.source_height_px as usize);
+
+        let worker_count =
+            cap_afz_workers_for_mask_bytes(choose_afz_encode_threads(), expected_pixels);
+        let queue_depth = choose_afz_queue_depth(worker_count, expected_pixels);
+        let (work_tx, work_rx) = bounded::<(u32, Vec<u8>)>(queue_depth);
+        let (result_tx, result_rx) = mpsc::channel::<Result<AffPreparedLayer, SlicerV3Error>>();
+        let mut workers = Vec::with_capacity(worker_count);
+
+        for _ in 0..worker_count {
+            let work_rx = work_rx.clone();
+            let result_tx = result_tx.clone();
+            let pixels = expected_pixels;
+            let handle = thread::spawn(move || loop {
+                let Ok((layer_index, raw_mask)) = work_rx.recv() else { break; };
+
+                if raw_mask.is_empty() {
+                    let prep = encode_single_aff_pws_empty_layer(layer_index as usize, pixels, aa_level);
+                    crate::pipeline::return_mask_to_pool(raw_mask);
+                    if result_tx.send(Ok(prep)).is_err() { break; }
+                    continue;
+                }
+                if raw_mask.len() != pixels {
+                    let len = raw_mask.len();
+                    crate::pipeline::return_mask_to_pool(raw_mask);
+                    let _ = result_tx.send(Err(SlicerV3Error::MissingRenderedLayerPayload(
+                        format!("AFF layer {layer_index} size mismatch: expected {pixels}, got {len}"),
+                    )));
+                    continue;
+                }
+                let prep = encode_single_aff_pws_layer(layer_index as usize, &raw_mask, aa_level);
+                crate::pipeline::return_mask_to_pool(raw_mask);
+                if result_tx.send(Ok(prep)).is_err() { break; }
+            });
+            workers.push(handle);
+        }
+        drop(work_rx);
+        drop(result_tx);
+
+        Ok(Some(Box::new(AffRawMaskStreamEncoder {
+            job: job.clone(),
+            aa_level,
+            work_tx: Some(work_tx),
+            result_rx,
+            workers,
+            consumed_layers: 0,
+        })))
     }
 }
 
