@@ -107,3 +107,410 @@ mod tests {
         assert_eq!(&bytes[..4], &0xDEADBEEFu32.to_le_bytes());
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════
+//  Table writers (per-table body bytes; caller emits named header)
+// ═══════════════════════════════════════════════════════════════════
+
+use super::aff_metadata::{AffBuildModel, AffMachineProfile, AffTimingModel};
+
+// Header body lengths from the C# SerializeWhen attribute table
+pub(super) const HEADER_LEN_V1: u32 = 80;
+pub(super) const HEADER_LEN_V515: u32 = 80;
+pub(super) const HEADER_LEN_V516: u32 = 84;
+pub(super) const HEADER_LEN_V517: u32 = 92;
+pub(super) const HEADER_LEN_V518: u32 = 96;
+
+pub(super) fn header_body_length_for_version(v: u16) -> u32 {
+    match v {
+        518 => HEADER_LEN_V518,
+        517 => HEADER_LEN_V517,
+        516 => HEADER_LEN_V516,
+        515 => HEADER_LEN_V515,
+        _ => HEADER_LEN_V1,
+    }
+}
+
+pub(super) fn write_header_body(
+    out: &mut Cursor<Vec<u8>>,
+    version: u16,
+    resolution_x: u32,
+    resolution_y: u32,
+    timing: &AffTimingModel,
+    build: &AffBuildModel,
+    profile: &AffMachineProfile,
+    print_time_sec: u32,
+    volume_ml: f32,
+    weight_g: f32,
+    price: f32,
+    per_layer_settings: bool,
+) -> std::io::Result<()> {
+    let _ = build; // build dims go into Machine table, not Header
+    let start_pos = out.position();
+
+    let total_lift = timing.lift_height_mm + timing.lift_height2_mm;
+    let advanced_mode_flag: u32 = if version >= 516 && (timing.lift_height2_mm > 0.0 || timing.bottom_lift_height2_mm > 0.0) { 1 } else { 0 };
+
+    write_f32_le(out, profile.default_pixel_um)?;
+    write_f32_le(out, timing.layer_height_mm)?;
+    write_f32_le(out, timing.normal_exposure_sec)?;
+    write_f32_le(out, timing.wait_time_before_cure_sec)?;
+    write_f32_le(out, timing.bottom_exposure_sec)?;
+    write_f32_le(out, timing.bottom_layer_count as f32)?;
+    write_f32_le(out, if version >= 516 { total_lift } else { timing.lift_height_mm })?;
+    write_f32_le(out, timing.lift_speed_mm_s)?;
+    write_f32_le(out, timing.retract_speed_mm_s)?;
+    write_f32_le(out, volume_ml)?;
+    write_u32_le(out, 1)?;                       // AntiAliasing
+    write_u32_le(out, resolution_x)?;
+    write_u32_le(out, resolution_y)?;
+    write_f32_le(out, weight_g)?;
+    write_f32_le(out, price)?;
+    out.write_all(&[0x24, 0, 0, 0])?;            // '$'
+    write_u32_le(out, if per_layer_settings { 1 } else { 0 })?;
+    write_u32_le(out, print_time_sec)?;
+    write_u32_le(out, timing.transition_layer_count)?;
+    write_u32_le(out, 0)?;                       // TransitionLayerType
+
+    if version >= 516 {
+        write_u32_le(out, advanced_mode_flag)?;
+    }
+    if version >= 517 {
+        out.write_all(&[0u8, 0, 0, 0])?;         // Grey + BlurLevel (u16 + u16)
+        write_u32_le(out, 0)?;                   // ResinType
+    }
+    if version >= 518 {
+        write_u32_le(out, 0)?;                   // IntelligentMode
+    }
+
+    let written = out.position() - start_pos;
+    let expected = header_body_length_for_version(version) as u64;
+    debug_assert_eq!(written, expected, "Header body length mismatch for v{version}: wrote {written}, expected {expected}");
+    Ok(())
+}
+
+#[cfg(test)]
+mod header_writer_tests {
+    use super::*;
+    use super::super::aff_codec::AffRleFormat;
+
+    // pub(super) so sibling #[cfg(test)] modules (table_writer_tests,
+    // build_container_tests) can reuse these via `use super::header_writer_tests::*;`
+    pub(super) fn dummy_timing() -> AffTimingModel {
+        AffTimingModel {
+            normal_exposure_sec: 2.0, bottom_exposure_sec: 30.0, bottom_layer_count: 4,
+            layer_height_mm: 0.05, wait_time_before_cure_sec: 0.5,
+            lift_height_mm: 5.0, lift_speed_mm_s: 2.0, retract_speed_mm_s: 2.0,
+            lift_height2_mm: 0.0, lift_speed2_mm_s: 0.0, retract_speed2_mm_s: 0.0,
+            bottom_lift_height_mm: 5.0, bottom_lift_speed_mm_s: 2.0, bottom_retract_speed_mm_s: 2.0,
+            bottom_lift_height2_mm: 0.0, bottom_lift_speed2_mm_s: 0.0, bottom_retract_speed2_mm_s: 0.0,
+            transition_layer_count: 0, anti_alias_level: 1, twostage: false,
+        }
+    }
+
+    pub(super) fn dummy_build() -> AffBuildModel {
+        AffBuildModel {
+            machine_name: "Test".into(), display_width_mm: 100.0, display_height_mm: 100.0,
+            machine_z_mm: 100.0, pixel_width_um: 47.0, pixel_height_um: 47.0,
+            key_suffix: "pm3m".into(), resin_volume_ml: 1000.0, resin_density: 1.2, resin_price: 25.0,
+        }
+    }
+
+    pub(super) fn dummy_profile() -> AffMachineProfile {
+        AffMachineProfile {
+            key_suffix: "pm3m", machine_name: "Photon M3 Max", max_version: 516,
+            rle_format: AffRleFormat::Pw0,
+            display_width_mm: 298.08, display_height_mm: 165.60, machine_z_mm: 300.0,
+            default_pixel_um: 47.25, layer_image_format: "pw0Img",
+            preview_size: [224, 168], preview2_size: [330, 190],
+        }
+    }
+
+    #[test]
+    fn header_body_v1_is_80_bytes() {
+        let mut c = Cursor::new(Vec::new());
+        write_header_body(&mut c, 1, 1920, 1080, &dummy_timing(), &dummy_build(), &dummy_profile(),
+                          60, 10.0, 12.0, 0.50, false).unwrap();
+        assert_eq!(c.into_inner().len(), 80);
+    }
+
+    #[test]
+    fn header_body_v516_is_84_bytes() {
+        let mut c = Cursor::new(Vec::new());
+        write_header_body(&mut c, 516, 1920, 1080, &dummy_timing(), &dummy_build(), &dummy_profile(),
+                          60, 10.0, 12.0, 0.50, false).unwrap();
+        assert_eq!(c.into_inner().len(), 84);
+    }
+
+    #[test]
+    fn header_body_v517_is_92_bytes() {
+        let mut c = Cursor::new(Vec::new());
+        write_header_body(&mut c, 517, 1920, 1080, &dummy_timing(), &dummy_build(), &dummy_profile(),
+                          60, 10.0, 12.0, 0.50, false).unwrap();
+        assert_eq!(c.into_inner().len(), 92);
+    }
+
+    #[test]
+    fn header_body_v518_is_96_bytes() {
+        let mut c = Cursor::new(Vec::new());
+        write_header_body(&mut c, 518, 1920, 1080, &dummy_timing(), &dummy_build(), &dummy_profile(),
+                          60, 10.0, 12.0, 0.50, false).unwrap();
+        assert_eq!(c.into_inner().len(), 96);
+    }
+
+    #[test]
+    fn header_records_resolution_in_correct_position() {
+        let mut c = Cursor::new(Vec::new());
+        write_header_body(&mut c, 1, 0xDEAD, 0xBEEF, &dummy_timing(), &dummy_build(), &dummy_profile(),
+                          60, 10.0, 12.0, 0.50, false).unwrap();
+        let bytes = c.into_inner();
+        // ResolutionX at offset 44, ResolutionY at offset 48 (both u32 LE)
+        assert_eq!(&bytes[44..48], &0xDEADu32.to_le_bytes());
+        assert_eq!(&bytes[48..52], &0xBEEFu32.to_le_bytes());
+    }
+}
+
+// ── Preview tables (raw RGB565 pixel buffers) ────────────────────────
+
+pub(super) fn write_preview_body(
+    out: &mut Cursor<Vec<u8>>,
+    width: u32,
+    height: u32,
+    pixel_data: &[u8],
+) -> std::io::Result<()> {
+    // Body layout: ResolutionX (u32) + Mark (4 bytes, "x\0\0\0") + ResolutionY (u32) + pixels
+    write_u32_le(out, width)?;
+    out.write_all(&[b'x', 0, 0, 0])?;
+    write_u32_le(out, height)?;
+    out.write_all(pixel_data)
+}
+
+pub(super) fn preview_body_length(width: u32, height: u32) -> u32 {
+    12 + (width * height * 2)
+}
+
+pub(super) fn write_preview2_body(
+    out: &mut Cursor<Vec<u8>>,
+    width: u32,
+    height: u32,
+    pixel_data: &[u8],
+) -> std::io::Result<()> {
+    // Body layout: ResolutionX (u32) + BackgroundColor1 (u16) + BackgroundColor2 (u16) +
+    // ResolutionY (u32) + pixels
+    write_u32_le(out, width)?;
+    out.write_all(&4293u16.to_le_bytes())?; // BackgroundColor1 default from UVTools
+    out.write_all(&0u16.to_le_bytes())?;    // BackgroundColor2
+    write_u32_le(out, height)?;
+    out.write_all(pixel_data)
+}
+
+pub(super) fn preview2_body_length(width: u32, height: u32) -> u32 {
+    12 + (width * height * 2)
+}
+
+#[cfg(test)]
+mod preview_writer_tests {
+    use super::*;
+
+    #[test]
+    fn preview_body_length_matches_written_size() {
+        let pixels = vec![0u8; 224 * 168 * 2];
+        let mut c = Cursor::new(Vec::new());
+        write_preview_body(&mut c, 224, 168, &pixels).unwrap();
+        assert_eq!(c.into_inner().len() as u32, preview_body_length(224, 168));
+    }
+
+    #[test]
+    fn preview2_body_length_matches_written_size() {
+        let pixels = vec![0u8; 330 * 190 * 2];
+        let mut c = Cursor::new(Vec::new());
+        write_preview2_body(&mut c, 330, 190, &pixels).unwrap();
+        assert_eq!(c.into_inner().len() as u32, preview2_body_length(330, 190));
+    }
+}
+
+// ── Extra table (v516+) — TSMC two-stage lift parameters ────────────
+
+pub(super) const EXTRA_BODY_LENGTH: u32 = 24; // C# always serializes 24 bytes regardless of struct size
+
+pub(super) fn write_extra_body(out: &mut Cursor<Vec<u8>>, timing: &AffTimingModel) -> std::io::Result<()> {
+    let start = out.position();
+    write_u32_le(out, 2)?;                                  // BottomLiftCount
+    write_f32_le(out, timing.bottom_lift_height_mm)?;       // BottomLiftHeight1
+    write_f32_le(out, timing.bottom_lift_speed_mm_s)?;      // BottomLiftSpeed1
+    write_f32_le(out, timing.bottom_retract_speed2_mm_s)?;  // BottomRetractSpeed2 (intentional ordering!)
+    write_f32_le(out, timing.bottom_lift_height2_mm)?;      // BottomLiftHeight2
+    // Total so far: 4 + 4*4 = 20 bytes. C# TableLength is 24. The remaining 4 bytes are
+    // BottomLiftSpeed2 (truncated by the manually-set TableLength=24). We pad to match:
+    write_f32_le(out, timing.bottom_lift_speed2_mm_s)?;     // BottomLiftSpeed2 -> reaches 24 bytes
+
+    let written = out.position() - start;
+    debug_assert_eq!(written, EXTRA_BODY_LENGTH as u64,
+        "Extra body length wrong: wrote {written}, expected {EXTRA_BODY_LENGTH}");
+    Ok(())
+}
+
+// ── Machine table (v516+) ───────────────────────────────────────────
+
+pub(super) fn machine_body_length_for_version(v: u16) -> u32 {
+    if v >= 518 { 224 } else { 156 }
+}
+
+pub(super) fn write_machine_body(
+    out: &mut Cursor<Vec<u8>>,
+    version: u16,
+    profile: &AffMachineProfile,
+    build: &AffBuildModel,
+    resolution_x: u32,
+    resolution_y: u32,
+) -> std::io::Result<()> {
+    let start = out.position();
+    let property_fields: u32 = if version >= 518 { 15 } else if version >= 517 { 7 } else { 1 };
+
+    write_padded_string(out, &build.machine_name, 96)?;             // MachineName
+    write_padded_string(out, profile.layer_image_format, 16)?;       // LayerImageFormat
+    write_u32_le(out, 16)?;                                          // MaxAntialiasingLevel
+    write_u32_le(out, property_fields)?;                             // PropertyFields
+    write_f32_le(out, build.display_width_mm)?;                      // DisplayWidth
+    write_f32_le(out, build.display_height_mm)?;                     // DisplayHeight
+    write_f32_le(out, build.machine_z_mm)?;                          // MachineZ
+    write_u32_le(out, profile.max_version as u32)?;                  // MaxFileVersion
+    write_u32_le(out, 6506241)?;                                     // MachineBackground
+    // Position now: 96 + 16 + 4 + 4 + 4 + 4 + 4 + 4 + 4 = 140 bytes from start.
+    // v516 TableLength is 156 -> need 16 more bytes:
+    write_f32_le(out, build.pixel_width_um)?;    // PixelWidthUm
+    write_f32_le(out, build.pixel_height_um)?;   // PixelHeightUm
+    write_u32_le(out, 0)?;                       // Padding1
+    write_u32_le(out, 0)?;                       // Padding2
+
+    if version >= 518 {
+        // v518 TableLength=224: need 224 - 156 = 68 more bytes
+        for _ in 0..6 { write_u32_le(out, 0)?; }              // Padding3..8 (24 bytes)
+        write_u32_le(out, 1)?;                                // DisplayCount
+        write_u32_le(out, 0)?;                                // Padding9
+        out.write_all(&(resolution_x as u16).to_le_bytes())?;  // ResolutionX
+        out.write_all(&(resolution_y as u16).to_le_bytes())?;  // ResolutionY
+        for _ in 0..4 { write_u32_le(out, 0)?; }              // Padding10..13 (16 bytes)
+        // 24 + 4 + 4 + 2 + 2 + 16 = 52, but we need 68. Add more padding:
+        for _ in 0..4 { write_u32_le(out, 0)?; }              // extra padding -> 68
+    }
+
+    let written = out.position() - start;
+    let expected = machine_body_length_for_version(version) as u64;
+    debug_assert_eq!(written, expected,
+        "Machine body length wrong for v{version}: wrote {written}, expected {expected}");
+    Ok(())
+}
+
+// ── Software table (v517+) — no named-table wrapper, just 164 bytes ──
+
+pub(super) const SOFTWARE_TABLE_LENGTH: u32 = 164;
+
+pub(super) fn write_software_body(out: &mut Cursor<Vec<u8>>) -> std::io::Result<()> {
+    let start = out.position();
+    write_padded_string(out, "DragonFruit", 32)?;                 // SoftwareName
+    write_u32_le(out, SOFTWARE_TABLE_LENGTH)?;                    // TableLength (self-describing)
+    write_padded_string(out, "1.0.0", 32)?;                       // Version
+    write_padded_string(out, "rust-windows", 64)?;                // OperativeSystem
+    write_padded_string(out, "3.3-CoreProfile", 32)?;             // OpenGLVersion
+    let written = out.position() - start;
+    debug_assert_eq!(written, SOFTWARE_TABLE_LENGTH as u64);
+    Ok(())
+}
+
+// ── Model table (v517+) — bounding box ──────────────────────────────
+
+pub(super) const MODEL_BODY_LENGTH: u32 = 32;
+
+pub(super) fn write_model_body(
+    out: &mut Cursor<Vec<u8>>,
+    display_w_mm: f32,
+    display_h_mm: f32,
+    print_height_mm: f32,
+) -> std::io::Result<()> {
+    let half_w = display_w_mm / 2.0;
+    let half_h = display_h_mm / 2.0;
+    write_f32_le(out, -half_w)?;     // MinX
+    write_f32_le(out, -half_h)?;     // MinY
+    write_f32_le(out, 0.0)?;         // MinZ
+    write_f32_le(out, half_w)?;      // MaxX
+    write_f32_le(out, half_h)?;      // MaxY
+    write_f32_le(out, print_height_mm)?; // MaxZ
+    write_u32_le(out, 0)?;           // SupportsEnabled
+    write_f32_le(out, 0.0)?;         // SupportsDensity
+    Ok(())
+}
+
+// ── LayerImageColorTable (v515+) ────────────────────────────────────
+
+pub(super) const COLOR_TABLE_LENGTH: u32 = 4 + 4 + 16 + 4; // UseFullGrey(u32) + GreyMaxCount(u32) + Grey[16] + Unknown(u32)
+
+pub(super) fn write_color_table_body(out: &mut Cursor<Vec<u8>>, aa_level: u32) -> std::io::Result<()> {
+    let count: u32 = aa_level.clamp(1, 16);
+    write_u32_le(out, 0)?;       // UseFullGreyscale
+    write_u32_le(out, count)?;   // GreyMaxCount
+    let increment = 255.0f32 / count as f32;
+    let mut grey_bytes = [0u8; 16];
+    for i in 0..16u32 {
+        if i < count {
+            grey_bytes[i as usize] = ((i as f32 + 1.0) * increment).min(255.0) as u8;
+        } else {
+            grey_bytes[i as usize] = 255;
+        }
+    }
+    out.write_all(&grey_bytes)?;
+    write_u32_le(out, 0)?;       // Unknown
+    Ok(())
+}
+
+#[cfg(test)]
+mod table_writer_tests {
+    use super::*;
+    use super::header_writer_tests::*; // reuse dummy_* helpers
+
+    fn dummy_t() -> AffTimingModel { dummy_timing() }
+    fn dummy_b() -> AffBuildModel { dummy_build() }
+    fn dummy_p() -> AffMachineProfile { dummy_profile() }
+
+    #[test]
+    fn extra_body_is_24_bytes() {
+        let mut c = Cursor::new(Vec::new());
+        write_extra_body(&mut c, &dummy_t()).unwrap();
+        assert_eq!(c.into_inner().len(), EXTRA_BODY_LENGTH as usize);
+    }
+
+    #[test]
+    fn machine_body_v516_is_156_bytes() {
+        let mut c = Cursor::new(Vec::new());
+        write_machine_body(&mut c, 516, &dummy_p(), &dummy_b(), 6480, 3600).unwrap();
+        assert_eq!(c.into_inner().len(), 156);
+    }
+
+    #[test]
+    fn machine_body_v518_is_224_bytes() {
+        let mut c = Cursor::new(Vec::new());
+        write_machine_body(&mut c, 518, &dummy_p(), &dummy_b(), 6480, 3600).unwrap();
+        assert_eq!(c.into_inner().len(), 224);
+    }
+
+    #[test]
+    fn software_body_is_164_bytes() {
+        let mut c = Cursor::new(Vec::new());
+        write_software_body(&mut c).unwrap();
+        assert_eq!(c.into_inner().len(), SOFTWARE_TABLE_LENGTH as usize);
+    }
+
+    #[test]
+    fn model_body_is_32_bytes() {
+        let mut c = Cursor::new(Vec::new());
+        write_model_body(&mut c, 100.0, 60.0, 50.0).unwrap();
+        assert_eq!(c.into_inner().len(), MODEL_BODY_LENGTH as usize);
+    }
+
+    #[test]
+    fn color_table_is_28_bytes() {
+        let mut c = Cursor::new(Vec::new());
+        write_color_table_body(&mut c, 1).unwrap();
+        assert_eq!(c.into_inner().len(), COLOR_TABLE_LENGTH as usize);
+    }
+}
