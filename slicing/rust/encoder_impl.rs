@@ -576,6 +576,96 @@ impl RleStreamEncoder for AffRleStreamEncoder {
     }
 }
 
+struct AffRawMaskStreamEncoder {
+    job: SliceJobV3,
+    aa_level: u8,
+    work_tx: Option<crossbeam_channel::Sender<(u32, Vec<u8>)>>,
+    result_rx: mpsc::Receiver<Result<AffPreparedLayer, SlicerV3Error>>,
+    workers: Vec<thread::JoinHandle<()>>,
+    consumed_layers: u32,
+}
+
+impl RawMaskStreamEncoder for AffRawMaskStreamEncoder {
+    fn consume_raw_mask_layer(
+        &mut self,
+        layer_index: u32,
+        raw_mask: Vec<u8>,
+    ) -> Result<(), SlicerV3Error> {
+        let Some(ref tx) = self.work_tx else {
+            return Err(SlicerV3Error::MissingRenderedLayerPayload(
+                "AFF streaming encoder no longer accepts layers after finalize".to_string(),
+            ));
+        };
+        tx.send((layer_index, raw_mask)).map_err(|_| {
+            SlicerV3Error::MissingRenderedLayerPayload(
+                "AFF streaming worker channel closed unexpectedly".to_string(),
+            )
+        })?;
+        self.consumed_layers = self.consumed_layers.saturating_add(1);
+        Ok(())
+    }
+
+    fn finalize_to_bytes(mut self: Box<Self>) -> Result<Vec<u8>, SlicerV3Error> {
+        if self.consumed_layers == 0 {
+            return Err(SlicerV3Error::MissingRenderedLayerPayload(
+                "no rendered layers were provided for AFF encoding".to_string(),
+            ));
+        }
+        let _ = self.work_tx.take();
+        while let Some(handle) = self.workers.pop() {
+            if handle.join().is_err() {
+                return Err(SlicerV3Error::UnsupportedOutput(
+                    "AFF streaming worker panicked".to_string(),
+                ));
+            }
+        }
+
+        let expected = self.consumed_layers as usize;
+        let mut ordered: Vec<Option<AffPreparedLayer>> = Vec::with_capacity(expected);
+        ordered.resize_with(expected, || None);
+        for _ in 0..expected {
+            let prepared = self.result_rx.recv().map_err(|_| {
+                SlicerV3Error::MissingRenderedLayerPayload(
+                    "AFF streaming worker results ended unexpectedly".to_string(),
+                )
+            })??;
+            let idx = prepared.index;
+            if idx >= expected {
+                return Err(SlicerV3Error::MissingRenderedLayerPayload(
+                    format!("AFF worker emitted out-of-range layer index {}", idx),
+                ));
+            }
+            ordered[idx] = Some(prepared);
+        }
+
+        let mut prepared = Vec::with_capacity(expected);
+        for (i, slot) in ordered.into_iter().enumerate() {
+            let Some(layer) = slot else {
+                return Err(SlicerV3Error::MissingRenderedLayerPayload(
+                    format!("AFF layer {} missing from streaming worker output", i),
+                ));
+            };
+            prepared.push(layer);
+        }
+
+        let timing = parse_aff_timing_model(&self.job);
+        let build = parse_aff_build_model(&self.job);
+        let profile = aff_machine_profile_for_suffix(&build.key_suffix);
+        build_aff_container(&self.job, &timing, &build, profile, &prepared)
+    }
+}
+
+fn encode_single_aff_pws_layer(index: usize, raw_mask: &[u8], aa_level: u8) -> AffPreparedLayer {
+    let non_zero = raw_mask.iter().filter(|&&b| b > 0).count() as u32;
+    let encoded = encode_pws(raw_mask, aa_level);
+    AffPreparedLayer { index, encoded, non_zero_pixel_count: non_zero }
+}
+
+fn encode_single_aff_pws_empty_layer(index: usize, pixel_count: usize, aa_level: u8) -> AffPreparedLayer {
+    let encoded = encode_pws(&vec![0u8; pixel_count], aa_level);
+    AffPreparedLayer { index, encoded, non_zero_pixel_count: 0 }
+}
+
 /// Reads a single layer preview PNG from an AFZ (Anycubic Zip Format) file.
 /// `layer_number` is 1-based.
 pub fn read_layer_preview_png(path: &Path, layer_number: u32) -> Result<Vec<u8>, String> {
