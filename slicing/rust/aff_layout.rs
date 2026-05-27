@@ -701,3 +701,311 @@ mod layer_and_filemark_tests {
         assert_eq!(&bytes[16..20], &11u32.to_le_bytes());
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════
+//  build_aff_container — full file assembly
+// ═══════════════════════════════════════════════════════════════════
+
+use super::aff_preview::build_preview_rgb565;
+use crate::engine::SlicerV3Error;
+use crate::types::SliceJobV3;
+
+pub(super) struct AffPreparedLayer {
+    pub index: usize,
+    pub encoded: Vec<u8>,
+    pub non_zero_pixel_count: u32,
+}
+
+pub(super) fn build_aff_container(
+    job: &SliceJobV3,
+    timing: &AffTimingModel,
+    build: &AffBuildModel,
+    profile: &AffMachineProfile,
+    layers: &[AffPreparedLayer],
+) -> Result<Vec<u8>, SlicerV3Error> {
+    let version = profile.max_version;
+    let layer_count = layers.len() as u32;
+
+    let mut cursor = Cursor::new(Vec::with_capacity(4 * 1024 * 1024));
+    let mut addresses = FileMarkAddresses::default();
+
+    // 1. FileMark placeholder (zeros for now, backpatched at end)
+    let filemark_len = filemark_length_for_version(version);
+    cursor.write_all(&vec![0u8; filemark_len as usize])?;
+
+    // 2. Header
+    addresses.header = cursor.position() as u32;
+    write_named_table_header(&mut cursor, "HEADER", header_body_length_for_version(version))?;
+    let print_time_sec = compute_print_time_sec(timing, layers.len() as u32) as u32;
+    let volume_ml = compute_volume_ml(timing, build, job, layers);
+    let weight_g = volume_ml * build.resin_density;
+    let cost = if build.resin_volume_ml > 0.0 {
+        (volume_ml / build.resin_volume_ml) * build.resin_price
+    } else { 0.0 };
+
+    write_header_body(
+        &mut cursor, version,
+        job.source_width_px, job.source_height_px,
+        timing, build, profile,
+        print_time_sec, volume_ml, weight_g, cost, false,
+    )?;
+
+    // 3. Preview (raw RGB565)
+    let prev_w = profile.preview_size[0];
+    let prev_h = profile.preview_size[1];
+    let preview_pixels = build_preview_rgb565(job.export_thumbnail_png_base64.as_deref(), prev_w, prev_h)
+        .unwrap_or_else(|| vec![0u8; (prev_w * prev_h * 2) as usize]);
+    addresses.preview = cursor.position() as u32;
+    write_named_table_header(&mut cursor, "PREVIEW", preview_body_length(prev_w, prev_h))?;
+    write_preview_body(&mut cursor, prev_w, prev_h, &preview_pixels)?;
+
+    // 4. LayerImageColorTable (v515+)
+    if version >= 515 {
+        addresses.layer_image_color_table = cursor.position() as u32;
+        // NOTE: this table is NOT preceded by a named header in UVTools — it's
+        // written via plain serialization. We write only its body, prefixed by
+        // its own length field embedded above? Re-check UVTools:
+        // Actually Section/AnycubicNamedTable wraps everything else; the
+        // LayerImageColorTable struct extends from no base class - it's just
+        // serialized raw. So we write only the body bytes (no name+length header).
+        write_color_table_body(&mut cursor, timing.anti_alias_level)?;
+    }
+
+    // 5. Reserve LayerDef table (size known: name+len+body)
+    addresses.layer_definition = cursor.position() as u32;
+    let layer_def_total = 16 + layer_def_body_length(layer_count); // 12-byte name + 4-byte length + body
+    cursor.write_all(&vec![0u8; layer_def_total as usize])?;
+
+    // 6. Extra (v516+)
+    if version >= 516 {
+        addresses.extra = cursor.position() as u32;
+        write_named_table_header(&mut cursor, "EXTRA", EXTRA_BODY_LENGTH)?;
+        write_extra_body(&mut cursor, timing)?;
+    }
+
+    // 7. Machine (v516+)
+    if version >= 516 {
+        addresses.machine = cursor.position() as u32;
+        write_named_table_header(&mut cursor, "MACHINE", machine_body_length_for_version(version))?;
+        write_machine_body(&mut cursor, version, profile, build, job.source_width_px, job.source_height_px)?;
+    }
+
+    // 8. Software (v517+) — not wrapped in named header; the struct embeds its own name+length
+    if version >= 517 {
+        addresses.software = cursor.position() as u32;
+        write_software_body(&mut cursor)?;
+    }
+
+    // 9. Model (v517+)
+    if version >= 517 {
+        addresses.model = cursor.position() as u32;
+        write_named_table_header(&mut cursor, "MODEL", MODEL_BODY_LENGTH)?;
+        let print_height = timing.layer_height_mm * layer_count as f32;
+        write_model_body(&mut cursor, build.display_width_mm, build.display_height_mm, print_height)?;
+    }
+
+    // 10. SubLayerDef reservation (v518+)
+    if version >= 518 {
+        addresses.sub_layer_definition = cursor.position() as u32;
+        let sub_total = 16 + sub_layer_def_body_length(layer_count);
+        cursor.write_all(&vec![0u8; sub_total as usize])?;
+    }
+
+    // 11. Preview2 (v518+)
+    if version >= 518 {
+        let p2w = profile.preview2_size[0];
+        let p2h = profile.preview2_size[1];
+        let p2_pixels = build_preview_rgb565(job.export_thumbnail_png_base64.as_deref(), p2w, p2h)
+            .unwrap_or_else(|| vec![0u8; (p2w * p2h * 2) as usize]);
+        addresses.preview2 = cursor.position() as u32;
+        write_named_table_header(&mut cursor, "PREVIEW2", preview2_body_length(p2w, p2h))?;
+        write_preview2_body(&mut cursor, p2w, p2h, &p2_pixels)?;
+    }
+
+    // 12. Layer image blob
+    addresses.layer_image = cursor.position() as u32;
+    let mut entries: Vec<AffLayerEntry> = Vec::with_capacity(layers.len());
+    let mut cumulative_height: f32 = 0.0;
+    let transition_start = timing.bottom_layer_count;
+    let transition_end = transition_start + timing.transition_layer_count;
+    for layer in layers {
+        let layer_idx = layer.index as u32;
+        let is_bottom = layer_idx < transition_start;
+
+        let exposure = if is_bottom {
+            timing.bottom_exposure_sec
+        } else if layer_idx < transition_end && timing.transition_layer_count > 0 {
+            let progress = (layer_idx - transition_start) as f32 / timing.transition_layer_count as f32;
+            timing.bottom_exposure_sec + (timing.normal_exposure_sec - timing.bottom_exposure_sec) * progress
+        } else {
+            timing.normal_exposure_sec
+        };
+
+        let lift_h = if is_bottom { timing.bottom_lift_height_mm + timing.bottom_lift_height2_mm }
+                     else { timing.lift_height_mm + timing.lift_height2_mm };
+        let lift_s = if is_bottom { timing.bottom_lift_speed_mm_s } else { timing.lift_speed_mm_s };
+
+        let data_addr = cursor.position() as u32;
+        cursor.write_all(&layer.encoded)?;
+        cumulative_height += timing.layer_height_mm;
+
+        entries.push(AffLayerEntry {
+            data_address: data_addr,
+            data_length: layer.encoded.len() as u32,
+            lift_height_mm: lift_h,
+            lift_speed_mm_s: lift_s,
+            exposure_time_sec: exposure,
+            layer_height_mm: timing.layer_height_mm, // RELATIVE thickness, not absolute Z
+            non_zero_pixel_count: layer.non_zero_pixel_count,
+        });
+    }
+
+    // 13. Backpatch LayerDef
+    cursor.seek(SeekFrom::Start(addresses.layer_definition as u64))?;
+    write_named_table_header(&mut cursor, "LAYERDEF", layer_def_body_length(layer_count))?;
+    write_layer_def_body(&mut cursor, &entries)?;
+
+    // 14. Backpatch SubLayerDef (v518+)
+    if version >= 518 {
+        cursor.seek(SeekFrom::Start(addresses.sub_layer_definition as u64))?;
+        write_named_table_header(&mut cursor, "SUBIMGS", sub_layer_def_body_length(layer_count))?;
+        write_sub_layer_def_body(&mut cursor, &entries)?;
+    }
+
+    // 15. Backpatch FileMark
+    cursor.seek(SeekFrom::Start(0))?;
+    write_filemark(&mut cursor, version, &addresses)?;
+
+    Ok(cursor.into_inner())
+}
+
+// ── Cost / time helpers ─────────────────────────────────────────────
+
+fn compute_print_time_sec(timing: &AffTimingModel, layer_count: u32) -> f32 {
+    let bottom = timing.bottom_layer_count.min(layer_count);
+    let normal = layer_count.saturating_sub(bottom);
+
+    let bottom_lift_total = timing.bottom_lift_height_mm + timing.bottom_lift_height2_mm;
+    let normal_lift_total = timing.lift_height_mm + timing.lift_height2_mm;
+
+    let bottom_motion_sec =
+        if timing.bottom_lift_speed_mm_s > 0.0 { bottom_lift_total / timing.bottom_lift_speed_mm_s } else { 0.0 } +
+        if timing.bottom_retract_speed_mm_s > 0.0 { bottom_lift_total / timing.bottom_retract_speed_mm_s } else { 0.0 };
+    let normal_motion_sec =
+        if timing.lift_speed_mm_s > 0.0 { normal_lift_total / timing.lift_speed_mm_s } else { 0.0 } +
+        if timing.retract_speed_mm_s > 0.0 { normal_lift_total / timing.retract_speed_mm_s } else { 0.0 };
+
+    (bottom as f32) * (timing.bottom_exposure_sec + timing.wait_time_before_cure_sec + bottom_motion_sec) +
+    (normal as f32) * (timing.normal_exposure_sec + timing.wait_time_before_cure_sec + normal_motion_sec)
+}
+
+fn compute_volume_ml(
+    timing: &AffTimingModel,
+    build: &AffBuildModel,
+    job: &SliceJobV3,
+    layers: &[AffPreparedLayer],
+) -> f32 {
+    let pixel_area_mm2 = (build.display_width_mm / job.source_width_px as f32)
+                       * (build.display_height_mm / job.source_height_px as f32);
+    let total_mm3: f32 = layers
+        .iter()
+        .map(|l| l.non_zero_pixel_count as f32 * pixel_area_mm2 * timing.layer_height_mm)
+        .sum();
+    total_mm3 / 1000.0
+}
+
+#[cfg(test)]
+mod build_container_tests {
+    use super::*;
+    use super::header_writer_tests::dummy_timing;
+    use super::super::aff_codec::AffRleFormat;
+
+    fn make_job() -> SliceJobV3 {
+        SliceJobV3 {
+            output_format: ".aff".to_string(),
+            format_version: None,
+            source_width_px: 4,
+            source_height_px: 4,
+            width_px: 4,
+            height_px: 4,
+            build_width_mm: 10.0,
+            build_depth_mm: 20.0,
+            layer_height_mm: 0.05,
+            total_layers: 2,
+            export_thumbnail_png_base64: None,
+            png_compression_strategy: "balanced".to_string(),
+            container_compression_level: 2,
+            anti_aliasing_level: "Off".to_string(),
+            aa_on_supports: false,
+            minimum_aa_alpha_percent: 35.0,
+            mirror_x: false,
+            mirror_y: false,
+            triangles_xyz: vec![],
+            metadata_json: "{}".to_string(),
+            x_packing_mode: "none".to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn pm3m_profile() -> AffMachineProfile {
+        AffMachineProfile {
+            key_suffix: "pm3m", machine_name: "Photon M3 Max", max_version: 516,
+            rle_format: AffRleFormat::Pw0,
+            display_width_mm: 298.08, display_height_mm: 165.60, machine_z_mm: 300.0,
+            default_pixel_um: 47.25, layer_image_format: "pw0Img",
+            preview_size: [224, 168], preview2_size: [330, 190],
+        }
+    }
+
+    fn pm3m_build() -> AffBuildModel {
+        AffBuildModel {
+            machine_name: "Photon M3 Max".into(),
+            display_width_mm: 298.08, display_height_mm: 165.60,
+            machine_z_mm: 300.0, pixel_width_um: 46.0, pixel_height_um: 46.0,
+            key_suffix: "pm3m".into(),
+            resin_volume_ml: 1000.0, resin_density: 1.2, resin_price: 25.0,
+        }
+    }
+
+    fn one_layer() -> Vec<AffPreparedLayer> {
+        vec![AffPreparedLayer { index: 0, encoded: vec![0x00, 16], non_zero_pixel_count: 0 }]
+    }
+
+    #[test]
+    fn pm3m_v516_container_starts_with_anycubic_mark() {
+        let bytes = build_aff_container(&make_job(), &dummy_timing(), &pm3m_build(), &pm3m_profile(), &one_layer()).unwrap();
+        assert_eq!(&bytes[..8], b"ANYCUBIC");
+    }
+
+    #[test]
+    fn pm3m_v516_filemark_version_is_516() {
+        let bytes = build_aff_container(&make_job(), &dummy_timing(), &pm3m_build(), &pm3m_profile(), &one_layer()).unwrap();
+        assert_eq!(&bytes[12..16], &516u32.to_le_bytes());
+    }
+
+    #[test]
+    fn pm3m_v516_contains_header_extra_machine_table_names() {
+        let bytes = build_aff_container(&make_job(), &dummy_timing(), &pm3m_build(), &pm3m_profile(), &one_layer()).unwrap();
+        assert!(bytes.windows(6).any(|w| w == b"HEADER"));
+        assert!(bytes.windows(5).any(|w| w == b"EXTRA"));
+        assert!(bytes.windows(7).any(|w| w == b"MACHINE"));
+        assert!(bytes.windows(7).any(|w| w == b"PREVIEW"));
+        assert!(bytes.windows(8).any(|w| w == b"LAYERDEF"));
+    }
+
+    #[test]
+    fn header_address_points_to_HEADER_table() {
+        let bytes = build_aff_container(&make_job(), &dummy_timing(), &pm3m_build(), &pm3m_profile(), &one_layer()).unwrap();
+        let header_addr = u32::from_le_bytes(bytes[20..24].try_into().unwrap()) as usize;
+        assert_eq!(&bytes[header_addr..header_addr + 6], b"HEADER");
+    }
+
+    #[test]
+    fn v518_container_includes_subimgs_and_preview2() {
+        let mut profile = pm3m_profile();
+        profile.max_version = 518;
+        let bytes = build_aff_container(&make_job(), &dummy_timing(), &pm3m_build(), &profile, &one_layer()).unwrap();
+        assert!(bytes.windows(7).any(|w| w == b"SUBIMGS"));
+        assert!(bytes.windows(8).any(|w| w == b"PREVIEW2"));
+    }
+}
