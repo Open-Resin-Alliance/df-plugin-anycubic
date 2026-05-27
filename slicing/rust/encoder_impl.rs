@@ -504,6 +504,78 @@ impl FormatEncoder for AzfPluginEncoder {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════
+//  AFF (Anycubic File Format) encoders
+// ═══════════════════════════════════════════════════════════════════
+
+use aff_codec::{aff_rle_format_for_suffix, encode_pw0, encode_pw0_from_rle, encode_pws, AffRleFormat};
+use aff_layout::{build_aff_container, AffPreparedLayer};
+use aff_metadata::{
+    machine_profile_for_suffix as aff_machine_profile_for_suffix,
+    parse_aff_build_model,
+    parse_aff_timing_model,
+};
+
+struct AffRleStreamEncoder {
+    job: SliceJobV3,
+    total_pixels: usize,
+    prepared: Vec<AffPreparedLayer>,
+}
+
+impl RleStreamEncoder for AffRleStreamEncoder {
+    fn consume_rle_layer(
+        &mut self,
+        layer_index: u32,
+        runs: Vec<crate::rle::RleRun>,
+    ) -> Result<(), SlicerV3Error> {
+        let encoded = encode_pw0_from_rle(&runs, self.total_pixels);
+        self.prepared.push(AffPreparedLayer {
+            index: layer_index as usize,
+            encoded,
+            non_zero_pixel_count: 0, // backfilled via set_area_stats
+        });
+        Ok(())
+    }
+
+    fn set_area_stats(&mut self, stats: Vec<LayerAreaStatsV3>) {
+        for layer in &mut self.prepared {
+            if let Some(s) = stats.get(layer.index) {
+                layer.non_zero_pixel_count = s.total_solid_pixels;
+            }
+        }
+    }
+
+    fn parallel_encode_fn(
+        &self,
+    ) -> Option<Arc<dyn Fn(u32, &[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync>> {
+        let total_pixels = self.total_pixels;
+        Some(Arc::new(move |_idx, runs| Ok(encode_pw0_from_rle(runs, total_pixels))))
+    }
+
+    fn store_encoded_layer(&mut self, layer_index: u32, bytes: Vec<u8>) {
+        self.prepared.push(AffPreparedLayer {
+            index: layer_index as usize,
+            encoded: bytes,
+            non_zero_pixel_count: 0,
+        });
+    }
+
+    fn finalize_to_bytes(mut self: Box<Self>) -> Result<Vec<u8>, SlicerV3Error> {
+        if self.prepared.is_empty() {
+            return Err(SlicerV3Error::MissingRenderedLayerPayload(
+                "no rendered layers were provided for AFF encoding".to_string(),
+            ));
+        }
+        self.prepared.sort_unstable_by_key(|l| l.index);
+
+        let timing = parse_aff_timing_model(&self.job);
+        let build = parse_aff_build_model(&self.job);
+        let profile = aff_machine_profile_for_suffix(&build.key_suffix);
+
+        build_aff_container(&self.job, &timing, &build, profile, &self.prepared)
+    }
+}
+
 /// Reads a single layer preview PNG from an AFZ (Anycubic Zip Format) file.
 /// `layer_number` is 1-based.
 pub fn read_layer_preview_png(path: &Path, layer_number: u32) -> Result<Vec<u8>, String> {
