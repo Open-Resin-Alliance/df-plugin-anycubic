@@ -263,3 +263,268 @@ mod tests {
         }
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════
+//  Timing & build models
+// ═══════════════════════════════════════════════════════════════════
+
+pub(super) const MM_MIN_TO_MM_SEC: f32 = 1.0 / 60.0;
+
+#[derive(Debug, Clone)]
+pub(super) struct AffTimingModel {
+    pub normal_exposure_sec: f32,
+    pub bottom_exposure_sec: f32,
+    pub bottom_layer_count: u32,
+    pub layer_height_mm: f32,
+    pub wait_time_before_cure_sec: f32,
+
+    // Stage 1 (slow) — used as the legacy LiftHeight/LiftSpeed when v < 516
+    pub lift_height_mm: f32,
+    pub lift_speed_mm_s: f32,
+    pub retract_speed_mm_s: f32,
+
+    // Stage 2 (fast) — only used for v >= 516
+    pub lift_height2_mm: f32,
+    pub lift_speed2_mm_s: f32,
+    pub retract_speed2_mm_s: f32,
+
+    pub bottom_lift_height_mm: f32,
+    pub bottom_lift_speed_mm_s: f32,
+    pub bottom_retract_speed_mm_s: f32,
+    pub bottom_lift_height2_mm: f32,
+    pub bottom_lift_speed2_mm_s: f32,
+    pub bottom_retract_speed2_mm_s: f32,
+
+    pub transition_layer_count: u32,
+    pub anti_alias_level: u32,
+    pub twostage: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct AffBuildModel {
+    pub machine_name: String,
+    pub display_width_mm: f32,
+    pub display_height_mm: f32,
+    pub machine_z_mm: f32,
+    pub pixel_width_um: f32,
+    pub pixel_height_um: f32,
+    pub key_suffix: String,
+    pub resin_volume_ml: f32,
+    pub resin_density: f32,
+    pub resin_price: f32,
+}
+
+// ── JSON helpers (duplicate of afz_metadata's — keep modules independent) ──
+
+fn parse_json(metadata_json: &str) -> Option<Value> {
+    serde_json::from_str::<Value>(metadata_json).ok()
+}
+
+fn get_f32(v: &Value, key: &str) -> Option<f32> {
+    v.get(key).and_then(Value::as_f64).map(|v| v as f32)
+}
+
+fn get_u32(v: &Value, key: &str) -> Option<u32> {
+    v.get(key).and_then(Value::as_u64).map(|v| v as u32)
+}
+
+fn get_str<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
+    v.get(key).and_then(Value::as_str)
+}
+
+pub(super) fn parse_aff_timing_model(job: &SliceJobV3) -> AffTimingModel {
+    let meta = parse_json(&job.metadata_json);
+    let material = meta.as_ref().and_then(|m| m.get("material"));
+    let anycubic = meta.as_ref().and_then(|m| m.get("anycubic"));
+    let printer = meta.as_ref().and_then(|m| m.get("printer"));
+
+    let settings_mode = printer
+        .and_then(|p| get_str(p, "settingsMode"))
+        .unwrap_or("simple");
+    let twostage = settings_mode.eq_ignore_ascii_case("twostage");
+
+    let f = |section: Option<&Value>, key: &str| -> Option<f32> {
+        section.and_then(|s| get_f32(s, key))
+    };
+
+    let speed = |section: Option<&Value>, key: &str, default_mm_min: f32| -> f32 {
+        section
+            .and_then(|s| get_f32(s, key))
+            .unwrap_or(default_mm_min)
+            * MM_MIN_TO_MM_SEC
+    };
+
+    let bottom_layer_count = material
+        .and_then(|m| get_u32(m, "bottomLayerCount"))
+        .unwrap_or(4);
+    let normal_exposure = f(material, "normalExposureSec").unwrap_or(2.0);
+    let bottom_exposure = f(material, "bottomExposureSec").unwrap_or(30.0);
+    let wait_time = f(material, "waitTimeBeforeCureSec")
+        .or_else(|| f(material, "lightOffDelaySec"))
+        .unwrap_or(0.5);
+
+    let lift_height = f(material, "liftDistanceMm").unwrap_or(5.0);
+    let lift_height2 = f(material, "liftDistance2Mm").unwrap_or(0.0);
+    let bottom_lift_height = f(material, "bottomLiftDistanceMm").unwrap_or(5.0);
+    let bottom_lift_height2 = f(material, "bottomLiftDistance2Mm").unwrap_or(0.0);
+
+    let lift_speed = speed(material, "liftSpeedMmMin", 120.0);
+    let lift_speed2 = speed(material, "liftSpeed2MmMin", 360.0);
+    let retract_speed = speed(material, "retractSpeedMmMin", 120.0);
+    let retract_speed2 = speed(material, "retractSpeed2MmMin", 360.0);
+    let bottom_lift_speed = speed(material, "bottomLiftSpeedMmMin", 120.0);
+    let bottom_lift_speed2 = speed(material, "bottomLiftSpeed2MmMin", 180.0);
+    let bottom_retract_speed = speed(material, "bottomRetractSpeedMmMin", 120.0);
+    let bottom_retract_speed2 = speed(material, "bottomRetractSpeed2MmMin", 180.0);
+
+    let transition_layer_count = material
+        .and_then(|m| get_u32(m, "transitionLayerCount"))
+        .or_else(|| anycubic.and_then(|a| get_u32(a, "transitionLayerCount")))
+        .unwrap_or(0);
+
+    let aa_level = anycubic
+        .and_then(|a| get_u32(a, "antiAliasLevel"))
+        .unwrap_or(1);
+
+    AffTimingModel {
+        normal_exposure_sec: normal_exposure,
+        bottom_exposure_sec: bottom_exposure,
+        bottom_layer_count,
+        layer_height_mm: job.layer_height_mm,
+        wait_time_before_cure_sec: wait_time,
+        lift_height_mm: lift_height,
+        lift_speed_mm_s: lift_speed,
+        retract_speed_mm_s: retract_speed,
+        lift_height2_mm: lift_height2,
+        lift_speed2_mm_s: lift_speed2,
+        retract_speed2_mm_s: retract_speed2,
+        bottom_lift_height_mm: bottom_lift_height,
+        bottom_lift_speed_mm_s: bottom_lift_speed,
+        bottom_retract_speed_mm_s: bottom_retract_speed,
+        bottom_lift_height2_mm: bottom_lift_height2,
+        bottom_lift_speed2_mm_s: bottom_lift_speed2,
+        bottom_retract_speed2_mm_s: bottom_retract_speed2,
+        transition_layer_count,
+        anti_alias_level: aa_level.clamp(1, 16),
+        twostage,
+    }
+}
+
+pub(super) fn parse_aff_build_model(job: &SliceJobV3) -> AffBuildModel {
+    let meta = parse_json(&job.metadata_json);
+    let anycubic = meta.as_ref().and_then(|m| m.get("anycubic"));
+    let printer = meta.as_ref().and_then(|m| m.get("printer"));
+    let build_volume = printer.and_then(|p| p.get("buildVolumeMm"));
+
+    let key_suffix = anycubic
+        .and_then(|a| get_str(a, "keySuffix"))
+        .unwrap_or("pwmo")
+        .to_string();
+
+    let profile = machine_profile_for_suffix(&key_suffix);
+
+    let machine_name = anycubic
+        .and_then(|a| get_str(a, "machineName"))
+        .or_else(|| printer.and_then(|p| get_str(p, "machineName")))
+        .unwrap_or(profile.machine_name)
+        .to_string();
+
+    let display_width = build_volume
+        .and_then(|v| get_f32(v, "width"))
+        .unwrap_or(profile.display_width_mm);
+    let display_height = build_volume
+        .and_then(|v| get_f32(v, "depth"))
+        .unwrap_or(profile.display_height_mm);
+    let machine_z = build_volume
+        .and_then(|v| get_f32(v, "height"))
+        .unwrap_or(profile.machine_z_mm);
+
+    let pixel_size = printer.and_then(|p| p.get("pixelSize"));
+    let pixel_width_um = pixel_size
+        .and_then(|ps| get_f32(ps, "x"))
+        .unwrap_or(profile.default_pixel_um);
+    let pixel_height_um = pixel_size
+        .and_then(|ps| get_f32(ps, "y"))
+        .unwrap_or(profile.default_pixel_um);
+
+    let resin_volume_ml = anycubic.and_then(|a| get_f32(a, "resinVolumeMl")).unwrap_or(1000.0);
+    let resin_density = anycubic.and_then(|a| get_f32(a, "resinDensity")).unwrap_or(1.2);
+    let resin_price = anycubic.and_then(|a| get_f32(a, "resinPrice")).unwrap_or(25.0);
+
+    AffBuildModel {
+        machine_name,
+        display_width_mm: display_width,
+        display_height_mm: display_height,
+        machine_z_mm: machine_z,
+        pixel_width_um,
+        pixel_height_um,
+        key_suffix,
+        resin_volume_ml,
+        resin_density,
+        resin_price,
+    }
+}
+
+#[cfg(test)]
+mod parser_tests {
+    use super::*;
+
+    fn make_job(metadata: &str) -> SliceJobV3 {
+        SliceJobV3 {
+            output_format: ".aff".to_string(),
+            format_version: None,
+            source_width_px: 4,
+            source_height_px: 4,
+            width_px: 4,
+            height_px: 4,
+            build_width_mm: 10.0,
+            build_depth_mm: 20.0,
+            layer_height_mm: 0.05,
+            total_layers: 1,
+            export_thumbnail_png_base64: None,
+            png_compression_strategy: "balanced".to_string(),
+            container_compression_level: 2,
+            anti_aliasing_level: "Off".to_string(),
+            aa_on_supports: false,
+            minimum_aa_alpha_percent: 35.0,
+            mirror_x: false,
+            mirror_y: false,
+            triangles_xyz: vec![],
+            metadata_json: metadata.to_string(),
+            x_packing_mode: "none".to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn build_model_reads_keysuffix_from_anycubic_namespace() {
+        let job = make_job(r#"{"anycubic":{"keySuffix":"pm3m"}}"#);
+        let build = parse_aff_build_model(&job);
+        assert_eq!(build.key_suffix, "pm3m");
+        assert_eq!(build.machine_name, "Photon M3 Max");
+    }
+
+    #[test]
+    fn build_model_uses_profile_default_when_keysuffix_absent() {
+        let job = make_job("{}");
+        let build = parse_aff_build_model(&job);
+        assert_eq!(build.key_suffix, "pwmo");
+        assert_eq!(build.machine_name, "Photon Mono");
+    }
+
+    #[test]
+    fn timing_model_converts_mm_min_to_mm_sec() {
+        let job = make_job(r#"{"material":{"liftSpeedMmMin":120}}"#);
+        let timing = parse_aff_timing_model(&job);
+        assert!((timing.lift_speed_mm_s - 2.0).abs() < 1e-6, "got {}", timing.lift_speed_mm_s);
+    }
+
+    #[test]
+    fn timing_model_clamps_aa_level_to_1_16() {
+        let job_low = make_job(r#"{"anycubic":{"antiAliasLevel":0}}"#);
+        assert_eq!(parse_aff_timing_model(&job_low).anti_alias_level, 1);
+
+        let job_high = make_job(r#"{"anycubic":{"antiAliasLevel":99}}"#);
+        assert_eq!(parse_aff_timing_model(&job_high).anti_alias_level, 16);
+    }
+}
