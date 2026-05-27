@@ -7,7 +7,7 @@
 mod afz_layout;
 mod afz_metadata;
 mod afz_preview;
-mod afz_pw0;
+mod anycubic_pw0;
 
 use crate::encoders::{FormatEncoder, RawMaskStreamEncoder, RleStreamEncoder};
 use crate::engine::SlicerV3Error;
@@ -107,7 +107,7 @@ fn choose_afz_queue_depth(worker_count: usize, bytes_per_mask: usize) -> usize {
 /// PW0-encode a single raw mask layer.
 fn encode_single_afz_layer(index: usize, raw_mask: &[u8]) -> AfzPreparedLayer {
     let non_zero = raw_mask.iter().filter(|&&b| b > 0).count() as u32;
-    let encoded = afz_pw0::encode_pw0(raw_mask);
+    let encoded = anycubic_pw0::encode_pw0(raw_mask);
     AfzPreparedLayer {
         index,
         encoded,
@@ -118,7 +118,7 @@ fn encode_single_afz_layer(index: usize, raw_mask: &[u8]) -> AfzPreparedLayer {
 /// PW0-encode an all-black empty layer without materializing a full-size zero mask.
 /// Used when the streaming pipeline sends a 0-byte sentinel for layers with no geometry.
 fn encode_single_afz_empty_layer(index: usize, pixel_count: usize) -> AfzPreparedLayer {
-    let encoded = afz_pw0::encode_pw0(&vec![0u8; pixel_count]);
+    let encoded = anycubic_pw0::encode_pw0(&vec![0u8; pixel_count]);
     AfzPreparedLayer {
         index,
         encoded,
@@ -132,7 +132,7 @@ fn encode_single_afz_rle_layer(
     runs: &[crate::rle::RleRun],
     pixel_count: usize,
 ) -> AfzPreparedLayer {
-    let encoded = afz_pw0::encode_pw0_from_rle(runs, pixel_count);
+    let encoded = anycubic_pw0::encode_pw0_from_rle(runs, pixel_count);
     AfzPreparedLayer {
         index,
         encoded,
@@ -294,7 +294,7 @@ impl RleStreamEncoder for AzfRleStreamEncoder {
         let total_pixels = self.total_pixels;
         Some(Arc::new(
             move |_layer_index: u32, runs: &[crate::rle::RleRun]| {
-                Ok(afz_pw0::encode_pw0_from_rle(runs, total_pixels))
+                Ok(anycubic_pw0::encode_pw0_from_rle(runs, total_pixels))
             },
         ))
     }
@@ -560,7 +560,7 @@ pub fn read_layer_preview_png(path: &Path, layer_number: u32) -> Result<Vec<u8>,
     }
 
     let expected_pixels = width_px as usize * height_px as usize;
-    let pixels = afz_pw0::decode_pw0(&rle_bytes, expected_pixels);
+    let pixels = anycubic_pw0::decode_pw0(&rle_bytes, expected_pixels);
     encode_pixels_as_grayscale_png(width_px, height_px, &pixels)
 }
 
