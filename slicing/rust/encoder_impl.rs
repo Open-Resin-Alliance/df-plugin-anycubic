@@ -4,6 +4,7 @@
 //! - `AffPluginEncoder` — Anycubic File Format (.aff), used by Photon and Photon Mono series
 //! - `AzfPluginEncoder` — Anycubic Zip Format (.azf), used by Photon Mono M7 series and Mono 4 Ultra
 
+mod aff_codec;
 mod afz_layout;
 mod afz_metadata;
 mod afz_preview;
