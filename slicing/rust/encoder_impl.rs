@@ -7,6 +7,7 @@
 mod afz_layout;
 mod afz_metadata;
 mod afz_preview;
+mod anycubic_preview_common;
 mod anycubic_pw0;
 
 use crate::encoders::{FormatEncoder, RawMaskStreamEncoder, RleStreamEncoder};
