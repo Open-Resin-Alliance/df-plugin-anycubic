@@ -3,7 +3,6 @@ import type {
   PluginLocalMaterialSettingsAdapterContract,
 } from '@/features/plugins/complexPluginContracts';
 import { ANYCUBIC_PLUGIN_MANIFEST } from './pluginManifest';
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- AFF wiring parked until encoder is implemented
 import { ANYCUBIC_AFF_FORMAT_DEFINITION } from './slicing/affFormatDefinition';
 import { ANYCUBIC_AZF_FORMAT_DEFINITION } from './slicing/azfFormatDefinition';
 
@@ -433,13 +432,11 @@ const ANYCUBIC_AZF_TWOSTAGE_NO_TEMP: PluginLocalMaterialSettingsAdapterContract 
   ...withoutField(ANYCUBIC_TWOSTAGE_SETTINGS_BASE, 'targetTemperatureC'),
 };
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- AFF wiring parked until encoder is implemented
 const ANYCUBIC_AFF_SIMPLE: PluginLocalMaterialSettingsAdapterContract = {
   outputFormat: ANYCUBIC_AFF_FORMAT_DEFINITION.outputFormat,
   ...ANYCUBIC_SIMPLE_SETTINGS_BASE,
 };
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- AFF wiring parked until encoder is implemented
 const ANYCUBIC_AFF_TWOSTAGE: PluginLocalMaterialSettingsAdapterContract = {
   outputFormat: ANYCUBIC_AFF_FORMAT_DEFINITION.outputFormat,
   ...ANYCUBIC_TWOSTAGE_SETTINGS_BASE,
@@ -455,7 +452,6 @@ function azfModeMapNoTemp() {
   return { simple: ANYCUBIC_AZF_SIMPLE_NO_TEMP, twostage: ANYCUBIC_AZF_TWOSTAGE_NO_TEMP };
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- AFF wiring parked until encoder is implemented
 function affModeMap() {
   return { simple: ANYCUBIC_AFF_SIMPLE, twostage: ANYCUBIC_AFF_TWOSTAGE };
 }
@@ -473,29 +469,27 @@ export const ANYCUBIC_COMPLEX_PLUGIN_DEFINITION: ComplexPluginDefinition = {
   },
   slicingFormatsByOutput: {
     // AFF format — Photon / Photon Mono series
-    // TODO(AFF): re-enable once AFF encoder is implemented
-    // '.pws': ANYCUBIC_AFF_FORMAT_DEFINITION,
-    // '.pw0': ANYCUBIC_AFF_FORMAT_DEFINITION,
-    // '.pwx': ANYCUBIC_AFF_FORMAT_DEFINITION,
-    // '.dlp': ANYCUBIC_AFF_FORMAT_DEFINITION,
-    // '.dl2p': ANYCUBIC_AFF_FORMAT_DEFINITION,
-    // '.pwmx': ANYCUBIC_AFF_FORMAT_DEFINITION,
-    // '.pmx2': ANYCUBIC_AFF_FORMAT_DEFINITION,
-    // '.pwmb': ANYCUBIC_AFF_FORMAT_DEFINITION,
-    // '.px6s': ANYCUBIC_AFF_FORMAT_DEFINITION,
-    // '.pwmo': ANYCUBIC_AFF_FORMAT_DEFINITION,
-    // '.pm3n': ANYCUBIC_AFF_FORMAT_DEFINITION,
-    // '.pm4n': ANYCUBIC_AFF_FORMAT_DEFINITION,
-    // '.pwms': ANYCUBIC_AFF_FORMAT_DEFINITION,
-    // '.pwma': ANYCUBIC_AFF_FORMAT_DEFINITION,
-    // '.pmsq': ANYCUBIC_AFF_FORMAT_DEFINITION,
-    // '.pm3': ANYCUBIC_AFF_FORMAT_DEFINITION,
-    // '.pm3m': ANYCUBIC_AFF_FORMAT_DEFINITION,
-    // '.pm3r': ANYCUBIC_AFF_FORMAT_DEFINITION,
-    // '.pm5': ANYCUBIC_AFF_FORMAT_DEFINITION,
-    // '.pm5s': ANYCUBIC_AFF_FORMAT_DEFINITION,
-    // '.m5sp': ANYCUBIC_AFF_FORMAT_DEFINITION,
-    // '.pwc': ANYCUBIC_AFF_FORMAT_DEFINITION,
+    '.pws': ANYCUBIC_AFF_FORMAT_DEFINITION,
+    '.pw0': ANYCUBIC_AFF_FORMAT_DEFINITION,
+    '.pwx': ANYCUBIC_AFF_FORMAT_DEFINITION,
+    '.dlp': ANYCUBIC_AFF_FORMAT_DEFINITION,
+    '.dl2p': ANYCUBIC_AFF_FORMAT_DEFINITION,
+    '.pwmx': ANYCUBIC_AFF_FORMAT_DEFINITION,
+    '.pmx2': ANYCUBIC_AFF_FORMAT_DEFINITION,
+    '.pwmb': ANYCUBIC_AFF_FORMAT_DEFINITION,
+    '.px6s': ANYCUBIC_AFF_FORMAT_DEFINITION,
+    '.pwmo': ANYCUBIC_AFF_FORMAT_DEFINITION,
+    '.pm3n': ANYCUBIC_AFF_FORMAT_DEFINITION,
+    '.pm4n': ANYCUBIC_AFF_FORMAT_DEFINITION,
+    '.pwms': ANYCUBIC_AFF_FORMAT_DEFINITION,
+    '.pwma': ANYCUBIC_AFF_FORMAT_DEFINITION,
+    '.pmsq': ANYCUBIC_AFF_FORMAT_DEFINITION,
+    '.pm3': ANYCUBIC_AFF_FORMAT_DEFINITION,
+    '.pm3m': ANYCUBIC_AFF_FORMAT_DEFINITION,
+    '.pm3r': ANYCUBIC_AFF_FORMAT_DEFINITION,
+    '.pm5': ANYCUBIC_AFF_FORMAT_DEFINITION,
+    '.pm5s': ANYCUBIC_AFF_FORMAT_DEFINITION,
+    '.m5sp': ANYCUBIC_AFF_FORMAT_DEFINITION,
     // AZF format — Photon Mono M7 series and Mono 4 Ultra
     '.pm4u': ANYCUBIC_AZF_FORMAT_DEFINITION,
     '.pm7': ANYCUBIC_AZF_FORMAT_DEFINITION,
@@ -504,29 +498,27 @@ export const ANYCUBIC_COMPLEX_PLUGIN_DEFINITION: ComplexPluginDefinition = {
   },
   localMaterialSettingsByOutput: {
     // AFF extensions default to the simple material editor when no settings mode is specified.
-    // TODO(AFF): re-enable once AFF encoder is implemented
-    // '.pws': ANYCUBIC_AFF_SIMPLE,
-    // '.pw0': ANYCUBIC_AFF_SIMPLE,
-    // '.pwx': ANYCUBIC_AFF_SIMPLE,
-    // '.dlp': ANYCUBIC_AFF_SIMPLE,
-    // '.dl2p': ANYCUBIC_AFF_SIMPLE,
-    // '.pwmx': ANYCUBIC_AFF_SIMPLE,
-    // '.pmx2': ANYCUBIC_AFF_SIMPLE,
-    // '.pwmb': ANYCUBIC_AFF_SIMPLE,
-    // '.px6s': ANYCUBIC_AFF_SIMPLE,
-    // '.pwmo': ANYCUBIC_AFF_SIMPLE,
-    // '.pm3n': ANYCUBIC_AFF_SIMPLE,
-    // '.pm4n': ANYCUBIC_AFF_SIMPLE,
-    // '.pwms': ANYCUBIC_AFF_SIMPLE,
-    // '.pwma': ANYCUBIC_AFF_SIMPLE,
-    // '.pmsq': ANYCUBIC_AFF_SIMPLE,
-    // '.pm3': ANYCUBIC_AFF_SIMPLE,
-    // '.pm3m': ANYCUBIC_AFF_SIMPLE,
-    // '.pm3r': ANYCUBIC_AFF_SIMPLE,
-    // '.pm5': ANYCUBIC_AFF_SIMPLE,
-    // '.pm5s': ANYCUBIC_AFF_SIMPLE,
-    // '.m5sp': ANYCUBIC_AFF_SIMPLE,
-    // '.pwc': ANYCUBIC_AFF_SIMPLE,
+    '.pws': ANYCUBIC_AFF_SIMPLE,
+    '.pw0': ANYCUBIC_AFF_SIMPLE,
+    '.pwx': ANYCUBIC_AFF_SIMPLE,
+    '.dlp': ANYCUBIC_AFF_SIMPLE,
+    '.dl2p': ANYCUBIC_AFF_SIMPLE,
+    '.pwmx': ANYCUBIC_AFF_SIMPLE,
+    '.pmx2': ANYCUBIC_AFF_SIMPLE,
+    '.pwmb': ANYCUBIC_AFF_SIMPLE,
+    '.px6s': ANYCUBIC_AFF_SIMPLE,
+    '.pwmo': ANYCUBIC_AFF_SIMPLE,
+    '.pm3n': ANYCUBIC_AFF_SIMPLE,
+    '.pm4n': ANYCUBIC_AFF_SIMPLE,
+    '.pwms': ANYCUBIC_AFF_SIMPLE,
+    '.pwma': ANYCUBIC_AFF_SIMPLE,
+    '.pmsq': ANYCUBIC_AFF_SIMPLE,
+    '.pm3': ANYCUBIC_AFF_SIMPLE,
+    '.pm3m': ANYCUBIC_AFF_SIMPLE,
+    '.pm3r': ANYCUBIC_AFF_SIMPLE,
+    '.pm5': ANYCUBIC_AFF_SIMPLE,
+    '.pm5s': ANYCUBIC_AFF_SIMPLE,
+    '.m5sp': ANYCUBIC_AFF_SIMPLE,
     // AZF extensions default to simple mode as well, with temperature omitted where unsupported.
     '.pm4u': ANYCUBIC_AZF_SIMPLE_NO_TEMP,
     '.pm7': ANYCUBIC_AZF_SIMPLE,
@@ -535,29 +527,27 @@ export const ANYCUBIC_COMPLEX_PLUGIN_DEFINITION: ComplexPluginDefinition = {
   },
   localMaterialSettingsByOutputAndMode: {
     // AFF extensions
-    // TODO(AFF): re-enable once AFF encoder is implemented
-    // '.pws': affModeMap(),
-    // '.pw0': affModeMap(),
-    // '.pwx': affModeMap(),
-    // '.dlp': affModeMap(),
-    // '.dl2p': affModeMap(),
-    // '.pwmx': affModeMap(),
-    // '.pmx2': affModeMap(),
-    // '.pwmb': affModeMap(),
-    // '.px6s': affModeMap(),
-    // '.pwmo': affModeMap(),
-    // '.pm3n': affModeMap(),
-    // '.pm4n': affModeMap(),
-    // '.pwms': affModeMap(),
-    // '.pwma': affModeMap(),
-    // '.pmsq': affModeMap(),
-    // '.pm3': affModeMap(),
-    // '.pm3m': affModeMap(),
-    // '.pm3r': affModeMap(),
-    // '.pm5': affModeMap(),
-    // '.pm5s': affModeMap(),
-    // '.m5sp': affModeMap(),
-    // '.pwc': affModeMap(),
+    '.pws': affModeMap(),
+    '.pw0': affModeMap(),
+    '.pwx': affModeMap(),
+    '.dlp': affModeMap(),
+    '.dl2p': affModeMap(),
+    '.pwmx': affModeMap(),
+    '.pmx2': affModeMap(),
+    '.pwmb': affModeMap(),
+    '.px6s': affModeMap(),
+    '.pwmo': affModeMap(),
+    '.pm3n': affModeMap(),
+    '.pm4n': affModeMap(),
+    '.pwms': affModeMap(),
+    '.pwma': affModeMap(),
+    '.pmsq': affModeMap(),
+    '.pm3': affModeMap(),
+    '.pm3m': affModeMap(),
+    '.pm3r': affModeMap(),
+    '.pm5': affModeMap(),
+    '.pm5s': affModeMap(),
+    '.m5sp': affModeMap(),
     // AZF extensions
     '.pm4u': azfModeMapNoTemp(),
     '.pm7': azfModeMap(),
