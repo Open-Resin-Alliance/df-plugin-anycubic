@@ -514,3 +514,190 @@ mod table_writer_tests {
         assert_eq!(c.into_inner().len(), COLOR_TABLE_LENGTH as usize);
     }
 }
+
+// ── LayerDef + SubLayerDef ──────────────────────────────────────────
+
+pub(super) const LAYER_DEF_ENTRY_SIZE: u32 = 32; // C# ClassSize constant
+pub(super) const SUB_LAYER_DEF_ENTRY_SIZE: u32 = 4 + 4 + 4 + 4*8; // DataAddress(u32) + DataLength(u32) + NonZeroPixels(u32) + 8 floats
+
+pub(super) fn layer_def_body_length(layer_count: u32) -> u32 {
+    4 + layer_count * LAYER_DEF_ENTRY_SIZE  // LayerCount(u32) + entries
+}
+
+pub(super) fn sub_layer_def_body_length(layer_count: u32) -> u32 {
+    // SubLayerDef table also has LayerCount(u32) + Index(u32) before the entries
+    4 + 4 + layer_count * SUB_LAYER_DEF_ENTRY_SIZE
+}
+
+/// One layer's per-layer parameters as written into LayerDef entries.
+pub(super) struct AffLayerEntry {
+    pub data_address: u32,
+    pub data_length: u32,
+    pub lift_height_mm: f32,
+    pub lift_speed_mm_s: f32,
+    pub exposure_time_sec: f32,
+    pub layer_height_mm: f32,
+    pub non_zero_pixel_count: u32,
+}
+
+pub(super) fn write_layer_def_body(
+    out: &mut Cursor<Vec<u8>>,
+    layers: &[AffLayerEntry],
+) -> std::io::Result<()> {
+    write_u32_le(out, layers.len() as u32)?;
+    for entry in layers {
+        write_u32_le(out, entry.data_address)?;
+        write_u32_le(out, entry.data_length)?;
+        write_f32_le(out, entry.lift_height_mm)?;
+        write_f32_le(out, entry.lift_speed_mm_s)?;
+        write_f32_le(out, entry.exposure_time_sec)?;
+        write_f32_le(out, entry.layer_height_mm)?;
+        write_u32_le(out, entry.non_zero_pixel_count)?;
+        write_u32_le(out, 0)?; // Padding1
+    }
+    Ok(())
+}
+
+pub(super) fn write_sub_layer_def_body(
+    out: &mut Cursor<Vec<u8>>,
+    layers: &[AffLayerEntry],
+) -> std::io::Result<()> {
+    write_u32_le(out, layers.len() as u32)?;
+    write_u32_le(out, 1)?; // Index (always 1 per UVTools default)
+    for entry in layers {
+        write_u32_le(out, entry.data_address)?;
+        write_u32_le(out, entry.data_length)?;
+        write_u32_le(out, entry.non_zero_pixel_count)?;
+        for _ in 0..8 { write_f32_le(out, 0.0)?; } // 8 padding floats
+    }
+    Ok(())
+}
+
+// ── FileMark ────────────────────────────────────────────────────────
+
+pub(super) const FILEMARK_LEN_V1: u32 = 36;
+pub(super) const FILEMARK_LEN_V515: u32 = 40;
+pub(super) const FILEMARK_LEN_V516: u32 = 48;
+pub(super) const FILEMARK_LEN_V517: u32 = 52;
+pub(super) const FILEMARK_LEN_V518: u32 = 60;
+
+pub(super) fn filemark_length_for_version(v: u16) -> u32 {
+    match v {
+        518 => FILEMARK_LEN_V518,
+        517 => FILEMARK_LEN_V517,
+        516 => FILEMARK_LEN_V516,
+        515 => FILEMARK_LEN_V515,
+        _ => FILEMARK_LEN_V1,
+    }
+}
+
+#[derive(Default, Debug, Clone, Copy)]
+pub(super) struct FileMarkAddresses {
+    pub header: u32,
+    pub software: u32,
+    pub preview: u32,
+    pub layer_image_color_table: u32,
+    pub layer_definition: u32,
+    pub extra: u32,
+    pub machine: u32,
+    pub layer_image: u32,
+    pub model: u32,
+    pub sub_layer_definition: u32,
+    pub preview2: u32,
+}
+
+pub(super) fn number_of_tables_for_version(v: u16) -> u32 {
+    match v {
+        518 => 11,
+        517 => 9,
+        516 => 8,
+        515 => 5,
+        _ => 4,
+    }
+}
+
+pub(super) fn write_filemark(
+    out: &mut Cursor<Vec<u8>>,
+    version: u16,
+    addresses: &FileMarkAddresses,
+) -> std::io::Result<()> {
+    let start = out.position();
+    write_padded_string(out, "ANYCUBIC", 12)?;                // Mark
+    write_u32_le(out, version as u32)?;                       // Version
+    write_u32_le(out, number_of_tables_for_version(version))?; // NumberOfTables
+    write_u32_le(out, addresses.header)?;                     // HeaderAddress
+    write_u32_le(out, addresses.software)?;                   // SoftwareAddress
+    write_u32_le(out, addresses.preview)?;                    // PreviewAddress
+    write_u32_le(out, addresses.layer_image_color_table)?;    // LayerImageColorTableAddress
+    write_u32_le(out, addresses.layer_definition)?;           // LayerDefinitionAddress
+    write_u32_le(out, addresses.extra)?;                      // ExtraAddress
+    if version >= 516 {
+        write_u32_le(out, addresses.machine)?;                // MachineAddress
+    }
+    write_u32_le(out, addresses.layer_image)?;                // LayerImageAddress
+    if version >= 517 {
+        write_u32_le(out, addresses.model)?;                  // ModelAddress
+    }
+    if version >= 518 {
+        write_u32_le(out, addresses.sub_layer_definition)?;   // SubLayerDefinitionAddress
+        write_u32_le(out, addresses.preview2)?;               // Preview2Address
+    }
+    let written = out.position() - start;
+    let expected = filemark_length_for_version(version) as u64;
+    debug_assert_eq!(written, expected,
+        "FileMark length wrong for v{version}: wrote {written}, expected {expected}");
+    Ok(())
+}
+
+#[cfg(test)]
+mod layer_and_filemark_tests {
+    use super::*;
+
+    #[test]
+    fn layer_def_entry_is_32_bytes() {
+        let entry = AffLayerEntry {
+            data_address: 100, data_length: 50,
+            lift_height_mm: 5.0, lift_speed_mm_s: 2.0,
+            exposure_time_sec: 2.0, layer_height_mm: 0.05,
+            non_zero_pixel_count: 12345,
+        };
+        let mut c = Cursor::new(Vec::new());
+        write_layer_def_body(&mut c, std::slice::from_ref(&entry)).unwrap();
+        // 4 (LayerCount) + 32 (entry)
+        assert_eq!(c.into_inner().len(), 36);
+    }
+
+    #[test]
+    fn sub_layer_def_entry_is_44_bytes() {
+        let entry = AffLayerEntry {
+            data_address: 100, data_length: 50,
+            lift_height_mm: 0.0, lift_speed_mm_s: 0.0,
+            exposure_time_sec: 0.0, layer_height_mm: 0.0,
+            non_zero_pixel_count: 0,
+        };
+        let mut c = Cursor::new(Vec::new());
+        write_sub_layer_def_body(&mut c, std::slice::from_ref(&entry)).unwrap();
+        // 4 (LayerCount) + 4 (Index) + 44 (entry: 3*u32 + 8*f32)
+        assert_eq!(c.into_inner().len(), 52);
+    }
+
+    #[test]
+    fn filemark_v1_is_36_bytes_with_ANYCUBIC_mark() {
+        let mut c = Cursor::new(Vec::new());
+        write_filemark(&mut c, 1, &FileMarkAddresses::default()).unwrap();
+        let bytes = c.into_inner();
+        assert_eq!(bytes.len(), 36);
+        assert_eq!(&bytes[..8], b"ANYCUBIC");
+        assert_eq!(&bytes[12..16], &1u32.to_le_bytes()); // Version
+        assert_eq!(&bytes[16..20], &4u32.to_le_bytes()); // NumberOfTables
+    }
+
+    #[test]
+    fn filemark_v518_is_60_bytes_with_11_tables() {
+        let mut c = Cursor::new(Vec::new());
+        write_filemark(&mut c, 518, &FileMarkAddresses::default()).unwrap();
+        let bytes = c.into_inner();
+        assert_eq!(bytes.len(), 60);
+        assert_eq!(&bytes[16..20], &11u32.to_le_bytes());
+    }
+}
