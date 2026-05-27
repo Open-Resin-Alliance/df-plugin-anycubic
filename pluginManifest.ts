@@ -31,6 +31,9 @@ export const ANYCUBIC_PLUGIN_MANIFEST = {
       family: typeof preset.family === 'string' && preset.family.trim().length > 0
         ? preset.family.trim()
         : undefined,
+      keySuffix: typeof preset.keySuffix === 'string' && preset.keySuffix.trim().length > 0
+        ? preset.keySuffix.trim().toLowerCase()
+        : undefined,
       pixelSize: preset.pixelSize,
       buildVolumeMm: {
         width: Number(preset.buildVolumeMm?.width) || 192,
