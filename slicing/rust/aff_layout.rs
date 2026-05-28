@@ -204,7 +204,7 @@ mod header_writer_tests {
             lift_height2_mm: 0.0, lift_speed2_mm_s: 0.0, retract_speed2_mm_s: 0.0,
             bottom_lift_height_mm: 5.0, bottom_lift_speed_mm_s: 2.0, bottom_retract_speed_mm_s: 2.0,
             bottom_lift_height2_mm: 0.0, bottom_lift_speed2_mm_s: 0.0, bottom_retract_speed2_mm_s: 0.0,
-            transition_layer_count: 0, anti_alias_level: 1, twostage: false,
+            transition_layer_count: 0, anti_alias_level: 1,
         }
     }
 
@@ -330,23 +330,40 @@ mod preview_writer_tests {
 }
 
 // ── Extra table (v516+) — TSMC two-stage lift parameters ────────────
+//
+// Quirk: UVTools serializes all 14 Extra fields (56-byte body) but hard-codes
+// the TableLength FIELD to 24 ("Don't know why..."). The firmware reads a
+// fixed-size 56-byte struct, so we must emit all 14 fields; only the declared
+// length value is the (intentionally wrong) 24. Field ORDER matches UVTools
+// exactly, including the deliberately-interleaved RetractSpeed2/Height2 pairs.
 
-pub(super) const EXTRA_BODY_LENGTH: u32 = 24; // C# always serializes 24 bytes regardless of struct size
+/// Value written into the Extra TableLength field (UVTools' hardcoded 24).
+pub(super) const EXTRA_DECLARED_LENGTH: u32 = 24;
+/// Actual Extra body bytes emitted (all 14 fields).
+pub(super) const EXTRA_BODY_BYTES: u32 = 56;
 
 pub(super) fn write_extra_body(out: &mut Cursor<Vec<u8>>, timing: &AffTimingModel) -> std::io::Result<()> {
     let start = out.position();
-    write_u32_le(out, 2)?;                                  // BottomLiftCount
-    write_f32_le(out, timing.bottom_lift_height_mm)?;       // BottomLiftHeight1
-    write_f32_le(out, timing.bottom_lift_speed_mm_s)?;      // BottomLiftSpeed1
-    write_f32_le(out, timing.bottom_retract_speed2_mm_s)?;  // BottomRetractSpeed2 (intentional ordering!)
-    write_f32_le(out, timing.bottom_lift_height2_mm)?;      // BottomLiftHeight2
-    // Total so far: 4 + 4*4 = 20 bytes. C# TableLength is 24. The remaining 4 bytes are
-    // BottomLiftSpeed2 (truncated by the manually-set TableLength=24). We pad to match:
-    write_f32_le(out, timing.bottom_lift_speed2_mm_s)?;     // BottomLiftSpeed2 -> reaches 24 bytes
+    // Bottom group
+    write_u32_le(out, 2)?;                                  // [0] BottomLiftCount
+    write_f32_le(out, timing.bottom_lift_height_mm)?;       // [1] BottomLiftHeight1
+    write_f32_le(out, timing.bottom_lift_speed_mm_s)?;      // [2] BottomLiftSpeed1
+    write_f32_le(out, timing.bottom_retract_speed2_mm_s)?;  // [3] BottomRetractSpeed2
+    write_f32_le(out, timing.bottom_lift_height2_mm)?;      // [4] BottomLiftHeight2
+    write_f32_le(out, timing.bottom_lift_speed2_mm_s)?;     // [5] BottomLiftSpeed2
+    write_f32_le(out, timing.bottom_retract_speed_mm_s)?;   // [6] BottomRetractSpeed1
+    // Normal group
+    write_u32_le(out, 2)?;                                  // [7] NormalLiftCount
+    write_f32_le(out, timing.lift_height_mm)?;              // [8] LiftHeight1
+    write_f32_le(out, timing.lift_speed_mm_s)?;             // [9] LiftSpeed1
+    write_f32_le(out, timing.retract_speed2_mm_s)?;         // [10] RetractSpeed2
+    write_f32_le(out, timing.lift_height2_mm)?;             // [11] LiftHeight2
+    write_f32_le(out, timing.lift_speed2_mm_s)?;            // [12] LiftSpeed2
+    write_f32_le(out, timing.retract_speed_mm_s)?;          // [13] RetractSpeed1
 
     let written = out.position() - start;
-    debug_assert_eq!(written, EXTRA_BODY_LENGTH as u64,
-        "Extra body length wrong: wrote {written}, expected {EXTRA_BODY_LENGTH}");
+    debug_assert_eq!(written, EXTRA_BODY_BYTES as u64,
+        "Extra body length wrong: wrote {written}, expected {EXTRA_BODY_BYTES}");
     Ok(())
 }
 
@@ -479,10 +496,11 @@ mod table_writer_tests {
     fn dummy_p() -> AffMachineProfile { dummy_profile() }
 
     #[test]
-    fn extra_body_is_24_bytes() {
+    fn extra_body_is_56_bytes() {
+        // All 14 Extra fields emit even though TableLength declares 24.
         let mut c = Cursor::new(Vec::new());
         write_extra_body(&mut c, &dummy_t()).unwrap();
-        assert_eq!(c.into_inner().len(), EXTRA_BODY_LENGTH as usize);
+        assert_eq!(c.into_inner().len(), EXTRA_BODY_BYTES as usize);
     }
 
     #[test]
@@ -794,7 +812,8 @@ pub(super) fn build_aff_container(
     // 6. Extra (v516+)
     if version >= 516 {
         addresses.extra = cursor.position() as u32;
-        write_named_table_header(&mut cursor, "EXTRA", EXTRA_BODY_LENGTH)?;
+        // Extra declares TableLength=24 (UVTools quirk) but emits a 56-byte body.
+        write_named_table_header(&mut cursor, "EXTRA", EXTRA_DECLARED_LENGTH)?;
         write_extra_body(&mut cursor, timing)?;
     }
 
@@ -843,7 +862,6 @@ pub(super) fn build_aff_container(
     // 12. Layer image blob
     addresses.layer_image = cursor.position() as u32;
     let mut entries: Vec<AffLayerEntry> = Vec::with_capacity(layers.len());
-    let mut cumulative_height: f32 = 0.0;
     let transition_start = timing.bottom_layer_count;
     let transition_end = transition_start + timing.transition_layer_count;
     for layer in layers {
@@ -865,7 +883,6 @@ pub(super) fn build_aff_container(
 
         let data_addr = cursor.position() as u32;
         cursor.write_all(&layer.encoded)?;
-        cumulative_height += timing.layer_height_mm;
 
         entries.push(AffLayerEntry {
             data_address: data_addr,

@@ -130,7 +130,6 @@ impl FormatEncoder for AffPluginEncoder {
 
         Ok(Some(Box::new(AffRawMaskStreamEncoder {
             job: job.clone(),
-            aa_level,
             work_tx: Some(work_tx),
             result_rx,
             workers,
@@ -580,7 +579,7 @@ impl FormatEncoder for AzfPluginEncoder {
 //  AFF (Anycubic File Format) encoders
 // ═══════════════════════════════════════════════════════════════════
 
-use aff_codec::{aff_rle_format_for_suffix, encode_pw0, encode_pw0_from_rle, encode_pws, AffRleFormat};
+use aff_codec::{aff_rle_format_for_suffix, encode_pw0_from_rle, encode_pws, AffRleFormat};
 use aff_layout::{build_aff_container, AffPreparedLayer};
 use aff_metadata::{
     machine_profile_for_suffix as aff_machine_profile_for_suffix,
@@ -650,7 +649,6 @@ impl RleStreamEncoder for AffRleStreamEncoder {
 
 struct AffRawMaskStreamEncoder {
     job: SliceJobV3,
-    aa_level: u8,
     work_tx: Option<crossbeam_channel::Sender<(u32, Vec<u8>)>>,
     result_rx: mpsc::Receiver<Result<AffPreparedLayer, SlicerV3Error>>,
     workers: Vec<thread::JoinHandle<()>>,

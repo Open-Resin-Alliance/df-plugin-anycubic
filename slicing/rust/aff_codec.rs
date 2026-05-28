@@ -4,7 +4,7 @@
 //! `anycubic_pw0`. PWS (multi-pass 1-bit threshold for anti-aliasing,
 //! used only by `.pws`) is implemented here.
 
-pub(super) use super::anycubic_pw0::{encode_pw0, encode_pw0_from_rle};
+pub(super) use super::anycubic_pw0::encode_pw0_from_rle;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum AffRleFormat {
