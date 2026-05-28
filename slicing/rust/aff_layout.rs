@@ -161,7 +161,7 @@ pub(super) fn write_header_body(
     write_f32_le(out, timing.lift_speed_mm_s)?;
     write_f32_le(out, timing.retract_speed_mm_s)?;
     write_f32_le(out, volume_ml)?;
-    write_u32_le(out, 1)?;                       // AntiAliasing
+    write_u32_le(out, timing.anti_alias_level.clamp(1, 16))?; // AntiAliasing (grey level count)
     write_u32_le(out, resolution_x)?;
     write_u32_le(out, resolution_y)?;
     write_f32_le(out, weight_g)?;
@@ -351,8 +351,18 @@ pub(super) fn write_extra_body(out: &mut Cursor<Vec<u8>>, timing: &AffTimingMode
 }
 
 // ── Machine table (v516+) ───────────────────────────────────────────
+//
+// Machine has IncludeBaseTableLength=true in UVTools, so its TableLength FIELD
+// value is the WHOLE table size (12-byte name + 4-byte length + body). The body
+// written after the named header is therefore `table_length - 16`.
+//
+// UVTools sets MachineSettings.TableLength = 156 for v516/v517 and 224 for v518.
+// At TL=156 (< 160) NONE of the SerializeWhen-gated fields (PixelWidthUm etc.)
+// are emitted, so the body is exactly the 140 always-present bytes. At TL=224 all
+// gated fields emit, giving 140 + 68 = 208 body bytes.
 
-pub(super) fn machine_body_length_for_version(v: u16) -> u32 {
+/// TableLength FIELD value for the Machine table (whole table incl. 16-byte base).
+pub(super) fn machine_table_length_for_version(v: u16) -> u32 {
     if v >= 518 { 224 } else { 156 }
 }
 
@@ -376,27 +386,23 @@ pub(super) fn write_machine_body(
     write_f32_le(out, build.machine_z_mm)?;                          // MachineZ
     write_u32_le(out, profile.max_version as u32)?;                  // MaxFileVersion
     write_u32_le(out, 6506241)?;                                     // MachineBackground
-    // Position now: 96 + 16 + 4 + 4 + 4 + 4 + 4 + 4 + 4 = 140 bytes from start.
-    // v516 TableLength is 156 -> need 16 more bytes:
-    write_f32_le(out, build.pixel_width_um)?;    // PixelWidthUm
-    write_f32_le(out, build.pixel_height_um)?;   // PixelHeightUm
-    write_u32_le(out, 0)?;                       // Padding1
-    write_u32_le(out, 0)?;                       // Padding2
+    // 140 bytes so far. v516/v517 stop here (TL=156 -> body=140).
 
     if version >= 518 {
-        // v518 TableLength=224: need 224 - 156 = 68 more bytes
-        for _ in 0..6 { write_u32_le(out, 0)?; }              // Padding3..8 (24 bytes)
-        write_u32_le(out, 1)?;                                // DisplayCount
-        write_u32_le(out, 0)?;                                // Padding9
-        out.write_all(&(resolution_x as u16).to_le_bytes())?;  // ResolutionX
-        out.write_all(&(resolution_y as u16).to_le_bytes())?;  // ResolutionY
-        for _ in 0..4 { write_u32_le(out, 0)?; }              // Padding10..13 (16 bytes)
-        // 24 + 4 + 4 + 2 + 2 + 16 = 52, but we need 68. Add more padding:
-        for _ in 0..4 { write_u32_le(out, 0)?; }              // extra padding -> 68
+        // TL=224 -> body=208 -> 68 conditional bytes after the 140 always-present.
+        write_f32_le(out, build.pixel_width_um)?;             // PixelWidthUm
+        write_f32_le(out, build.pixel_height_um)?;            // PixelHeightUm
+        for _ in 0..8 { write_u32_le(out, 0)?; }             // Padding1..8 (32 bytes)
+        write_u32_le(out, 1)?;                               // DisplayCount
+        write_u32_le(out, 0)?;                               // Padding9
+        out.write_all(&(resolution_x as u16).to_le_bytes())?; // ResolutionX (u16)
+        out.write_all(&(resolution_y as u16).to_le_bytes())?; // ResolutionY (u16)
+        for _ in 0..4 { write_u32_le(out, 0)?; }             // Padding10..13 (16 bytes)
+        // 4 + 4 + 32 + 4 + 4 + 2 + 2 + 16 = 68 -> body = 208.
     }
 
     let written = out.position() - start;
-    let expected = machine_body_length_for_version(version) as u64;
+    let expected = (machine_table_length_for_version(version) - 16) as u64;
     debug_assert_eq!(written, expected,
         "Machine body length wrong for v{version}: wrote {written}, expected {expected}");
     Ok(())
@@ -480,17 +486,19 @@ mod table_writer_tests {
     }
 
     #[test]
-    fn machine_body_v516_is_156_bytes() {
+    fn machine_body_v516_is_140_bytes() {
+        // IncludeBaseTableLength=true: TableLength field = 156 (whole), body = 156 - 16 = 140.
         let mut c = Cursor::new(Vec::new());
         write_machine_body(&mut c, 516, &dummy_p(), &dummy_b(), 6480, 3600).unwrap();
-        assert_eq!(c.into_inner().len(), 156);
+        assert_eq!(c.into_inner().len(), 140);
     }
 
     #[test]
-    fn machine_body_v518_is_224_bytes() {
+    fn machine_body_v518_is_208_bytes() {
+        // TableLength field = 224 (whole), body = 224 - 16 = 208.
         let mut c = Cursor::new(Vec::new());
         write_machine_body(&mut c, 518, &dummy_p(), &dummy_b(), 6480, 3600).unwrap();
-        assert_eq!(c.into_inner().len(), 224);
+        assert_eq!(c.into_inner().len(), 208);
     }
 
     #[test]
@@ -574,12 +582,18 @@ pub(super) fn write_sub_layer_def_body(
 }
 
 // ── FileMark ────────────────────────────────────────────────────────
-
-pub(super) const FILEMARK_LEN_V1: u32 = 36;
-pub(super) const FILEMARK_LEN_V515: u32 = 40;
-pub(super) const FILEMARK_LEN_V516: u32 = 48;
-pub(super) const FILEMARK_LEN_V517: u32 = 52;
-pub(super) const FILEMARK_LEN_V518: u32 = 60;
+//
+// Byte counts derived field-by-field from UVTools FileMark (SerializeWhen
+// attributes). Always present: Mark(12) + Version + NumberOfTables +
+// HeaderAddress + SoftwareAddress + PreviewAddress + LayerImageColorTableAddress
+// + LayerDefinitionAddress + ExtraAddress + LayerImageAddress = 12 + 9*4 = 48.
+// v516 adds MachineAddress (+4=52); v517 adds ModelAddress (+4=56);
+// v518 adds SubLayerDefinitionAddress + Preview2Address (+8=64).
+pub(super) const FILEMARK_LEN_V1: u32 = 48;
+pub(super) const FILEMARK_LEN_V515: u32 = 48;
+pub(super) const FILEMARK_LEN_V516: u32 = 52;
+pub(super) const FILEMARK_LEN_V517: u32 = 56;
+pub(super) const FILEMARK_LEN_V518: u32 = 64;
 
 pub(super) fn filemark_length_for_version(v: u16) -> u32 {
     match v {
@@ -682,22 +696,22 @@ mod layer_and_filemark_tests {
     }
 
     #[test]
-    fn filemark_v1_is_36_bytes_with_ANYCUBIC_mark() {
+    fn filemark_v1_is_48_bytes_with_ANYCUBIC_mark() {
         let mut c = Cursor::new(Vec::new());
         write_filemark(&mut c, 1, &FileMarkAddresses::default()).unwrap();
         let bytes = c.into_inner();
-        assert_eq!(bytes.len(), 36);
+        assert_eq!(bytes.len(), 48);
         assert_eq!(&bytes[..8], b"ANYCUBIC");
         assert_eq!(&bytes[12..16], &1u32.to_le_bytes()); // Version
         assert_eq!(&bytes[16..20], &4u32.to_le_bytes()); // NumberOfTables
     }
 
     #[test]
-    fn filemark_v518_is_60_bytes_with_11_tables() {
+    fn filemark_v518_is_64_bytes_with_11_tables() {
         let mut c = Cursor::new(Vec::new());
         write_filemark(&mut c, 518, &FileMarkAddresses::default()).unwrap();
         let bytes = c.into_inner();
-        assert_eq!(bytes.len(), 60);
+        assert_eq!(bytes.len(), 64);
         assert_eq!(&bytes[16..20], &11u32.to_le_bytes());
     }
 }
@@ -756,7 +770,8 @@ pub(super) fn build_aff_container(
     let preview_pixels = build_preview_rgb565(job.export_thumbnail_png_base64.as_deref(), prev_w, prev_h)
         .unwrap_or_else(|| vec![0u8; (prev_w * prev_h * 2) as usize]);
     addresses.preview = cursor.position() as u32;
-    write_named_table_header(&mut cursor, "PREVIEW", preview_body_length(prev_w, prev_h))?;
+    // Preview is IncludeBaseTableLength=true: TableLength field = whole table (body + 16).
+    write_named_table_header(&mut cursor, "PREVIEW", preview_body_length(prev_w, prev_h) + 16)?;
     write_preview_body(&mut cursor, prev_w, prev_h, &preview_pixels)?;
 
     // 4. LayerImageColorTable (v515+)
@@ -786,7 +801,8 @@ pub(super) fn build_aff_container(
     // 7. Machine (v516+)
     if version >= 516 {
         addresses.machine = cursor.position() as u32;
-        write_named_table_header(&mut cursor, "MACHINE", machine_body_length_for_version(version))?;
+        // Machine is IncludeBaseTableLength=true: TableLength field = whole table (156/224).
+        write_named_table_header(&mut cursor, "MACHINE", machine_table_length_for_version(version))?;
         write_machine_body(&mut cursor, version, profile, build, job.source_width_px, job.source_height_px)?;
     }
 
@@ -799,7 +815,8 @@ pub(super) fn build_aff_container(
     // 9. Model (v517+)
     if version >= 517 {
         addresses.model = cursor.position() as u32;
-        write_named_table_header(&mut cursor, "MODEL", MODEL_BODY_LENGTH)?;
+        // Model is IncludeBaseTableLength=true: TableLength field = whole table (body + 16).
+        write_named_table_header(&mut cursor, "MODEL", MODEL_BODY_LENGTH + 16)?;
         let print_height = timing.layer_height_mm * layer_count as f32;
         write_model_body(&mut cursor, build.display_width_mm, build.display_height_mm, print_height)?;
     }
@@ -818,7 +835,8 @@ pub(super) fn build_aff_container(
         let p2_pixels = build_preview_rgb565(job.export_thumbnail_png_base64.as_deref(), p2w, p2h)
             .unwrap_or_else(|| vec![0u8; (p2w * p2h * 2) as usize]);
         addresses.preview2 = cursor.position() as u32;
-        write_named_table_header(&mut cursor, "PREVIEW2", preview2_body_length(p2w, p2h))?;
+        // Preview2 is IncludeBaseTableLength=true: TableLength field = whole table (body + 16).
+        write_named_table_header(&mut cursor, "PREVIEW2", preview2_body_length(p2w, p2h) + 16)?;
         write_preview2_body(&mut cursor, p2w, p2h, &p2_pixels)?;
     }
 
@@ -868,7 +886,8 @@ pub(super) fn build_aff_container(
     // 14. Backpatch SubLayerDef (v518+)
     if version >= 518 {
         cursor.seek(SeekFrom::Start(addresses.sub_layer_definition as u64))?;
-        write_named_table_header(&mut cursor, "SUBIMGS", sub_layer_def_body_length(layer_count))?;
+        // SubLayerDef is IncludeBaseTableLength=true: TableLength field = whole table (body + 16).
+        write_named_table_header(&mut cursor, "SUBIMGS", sub_layer_def_body_length(layer_count) + 16)?;
         write_sub_layer_def_body(&mut cursor, &entries)?;
     }
 
