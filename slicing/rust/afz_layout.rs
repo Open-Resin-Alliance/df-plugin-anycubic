@@ -695,7 +695,6 @@ mod tests {
     fn make_test_job() -> SliceJobV3 {
         SliceJobV3 {
             output_format: ".azf".to_string(),
-            format_version: None,
             source_width_px: 4,
             source_height_px: 4,
             width_px: 4,
@@ -704,17 +703,10 @@ mod tests {
             build_depth_mm: 20.0,
             layer_height_mm: 0.05,
             total_layers: 2,
-            export_thumbnail_png_base64: None,
-            png_compression_strategy: "balanced".to_string(),
-            container_compression_level: 2,
             anti_aliasing_level: "Off".to_string(),
-            aa_on_supports: false,
-            minimum_aa_alpha_percent: 35.0,
-            mirror_x: false,
-            mirror_y: false,
             triangles_xyz: vec![],
             metadata_json: "{}".to_string(),
-            x_packing_mode: "none".to_string(),
+            ..Default::default()
         }
     }
 
