@@ -1,16 +1,24 @@
-import anycubicPrinters from './printers/printers.json';
+import photonPrinters from './printers/photon-series.json';
+import photonMonoPrinters from './printers/photon-mono-series.json';
+import photonMonoXPrinters from './printers/photon-mono-x-series.json';
+import photonMonoMPrinters from './printers/photon-mono-m-series.json';
+import photonMPrinters from './printers/photon-m-series.json';
+import photonPPrinters from './printers/photon-p-series.json';
 import type { PrinterPreset } from '../../src/features/profiles/profileStore';
 
-function sanitizePositiveNumber(value: unknown): number | null {
-  const n = Number(value);
-  if (!Number.isFinite(n) || n <= 0) return null;
-  return n;
+function resolvePresetImagePath(imageAssetPath: unknown): string | undefined {
+  if (typeof imageAssetPath !== 'string' || !imageAssetPath.trim()) return undefined;
+  const trimmed = imageAssetPath.trim();
+  if (trimmed.startsWith('/') || trimmed.startsWith('http')) return trimmed;
+  const normalized = trimmed.startsWith('./') ? trimmed.slice(2) : trimmed;
+  return `/plugins/anycubic/printers/${normalized}`;
 }
 
-function sanitizeProfileVersion(value: unknown): number | undefined {
-  const n = sanitizePositiveNumber(value);
-  if (n == null) return undefined;
-  return Math.max(1, Math.round(n));
+function mapPresets(presets: any[]) {
+  return presets.map((preset) => ({
+    ...preset,
+    imageAssetPath: resolvePresetImagePath(preset.imageAssetPath),
+  }));
 }
 
 export const ANYCUBIC_PLUGIN_MANIFEST = {
@@ -19,36 +27,13 @@ export const ANYCUBIC_PLUGIN_MANIFEST = {
   name: 'Anycubic Plugin',
   version: '0.1.0',
   description: 'Anycubic printer profile pack (AFF and AZF format support).',
-  printerPresets: (anycubicPrinters as any[]).map((preset) => {
-    const resolutionX = Number(preset.display?.resolutionX) || 3840;
-    const resolutionY = Number(preset.display?.resolutionY) || 2400;
-
-    return {
-      presetId: String(preset.presetId),
-      profileVersion: sanitizeProfileVersion(preset.profileVersion),
-      manufacturer: String(preset.manufacturer),
-      name: String(preset.name),
-      family: typeof preset.family === 'string' && preset.family.trim().length > 0
-        ? preset.family.trim()
-        : undefined,
-      keySuffix: typeof preset.keySuffix === 'string' && preset.keySuffix.trim().length > 0
-        ? preset.keySuffix.trim().toLowerCase()
-        : undefined,
-      pixelSize: preset.pixelSize,
-      buildVolumeMm: {
-        width: Number(preset.buildVolumeMm?.width) || 192,
-        depth: Number(preset.buildVolumeMm?.depth) || 120,
-        height: Number(preset.buildVolumeMm?.height) || 200,
-      },
-      display: {
-        resolutionX,
-        resolutionY,
-        outputFormat: String(preset.display?.outputFormat),
-        formatVersion: typeof preset.display?.formatVersion === 'string'
-          ? preset.display.formatVersion.trim().toLowerCase()
-          : undefined,
-      },
-    };
-  }) as PrinterPreset[],
+  printerPresets: [
+    ...mapPresets(photonPPrinters as any[]),
+    ...mapPresets(photonMonoMPrinters as any[]),
+    ...mapPresets(photonMonoPrinters as any[]),
+    ...mapPresets(photonMonoXPrinters as any[]),
+    ...mapPresets(photonMPrinters as any[]),
+    ...mapPresets(photonPrinters as any[])
+  ] as PrinterPreset[],
   materialTemplates: [],
 };

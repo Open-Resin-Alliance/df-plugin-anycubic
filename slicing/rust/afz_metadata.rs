@@ -38,6 +38,8 @@ pub(super) struct AfzMachineProfile {
     pub raster_segments_capacity: u32,
     /// Z-axis max acceleration for firmware time calculation.
     pub machine_max_acceleration_z: u32,
+    /// Maximum file format version accepted by this printer's firmware.
+    pub max_file_version: u32,
     /// Preview 1 dimensions [width, height].
     pub prev1_size: [u32; 2],
     /// Preview 2 dimensions [width, height].
@@ -57,6 +59,7 @@ const PROFILE_PM7M: AfzMachineProfile = AfzMachineProfile {
     rotate_z: 0.0,
     raster_segments_capacity: 0,
     machine_max_acceleration_z: 20,
+    max_file_version: 518,
     prev1_size: [224, 168],
     prev2_size: [336, 252],
     cloud_prev_size: [800, 600],
@@ -73,6 +76,7 @@ const PROFILE_PWSZ: AfzMachineProfile = AfzMachineProfile {
     rotate_z: 0.0,
     raster_segments_capacity: 100000,
     machine_max_acceleration_z: 20,
+    max_file_version: 518,
     prev1_size: [224, 168],
     prev2_size: [336, 252],
     cloud_prev_size: [800, 600],
@@ -89,6 +93,7 @@ const PROFILE_PM7: AfzMachineProfile = AfzMachineProfile {
     rotate_z: 0.0,
     raster_segments_capacity: 100000,
     machine_max_acceleration_z: 20,
+    max_file_version: 518,
     prev1_size: [168, 126],
     prev2_size: [168, 126],
     cloud_prev_size: [800, 600],
@@ -105,8 +110,43 @@ const PROFILE_PM4U: AfzMachineProfile = AfzMachineProfile {
     rotate_z: 180.0,
     raster_segments_capacity: 100000,
     machine_max_acceleration_z: 20,
+    max_file_version: 518,
     prev1_size: [168, 126],
     prev2_size: [168, 126],
+    cloud_prev_size: [800, 600],
+};
+
+const PROFILE_PP1: AfzMachineProfile = AfzMachineProfile {
+    machine_name: "Anycubic Photon P1",
+    picture: "Anycubic_Photon_P1.png",
+    pixel_pitch_x_um: 18.0,
+    pixel_pitch_y_um: 18.0,
+    print_x_mm: 223.0,
+    print_y_mm: 126.0,
+    print_z_mm: 230.0,
+    rotate_z: 0.0,
+    raster_segments_capacity: 100000,
+    machine_max_acceleration_z: 20,
+    max_file_version: 519,
+    prev1_size: [224, 168],
+    prev2_size: [336, 252],
+    cloud_prev_size: [800, 600],
+};
+
+const PROFILE_PP1M: AfzMachineProfile = AfzMachineProfile {
+    machine_name: "Anycubic Photon P1 Max",
+    picture: "Anycubic_Photon_P1Max.png",
+    pixel_pitch_x_um: 18.0,
+    pixel_pitch_y_um: 18.0,
+    print_x_mm: 297.5,
+    print_y_mm: 164.0,
+    print_z_mm: 300.0,
+    rotate_z: 0.0,
+    raster_segments_capacity: 100000,
+    machine_max_acceleration_z: 20,
+    max_file_version: 519,
+    prev1_size: [224, 168],
+    prev2_size: [336, 252],
     cloud_prev_size: [800, 600],
 };
 
@@ -118,6 +158,8 @@ pub(super) fn machine_profile_for_suffix(suffix: &str) -> &'static AfzMachinePro
         "pwsz" => &PROFILE_PWSZ,
         "pm7" => &PROFILE_PM7,
         "pm4u" => &PROFILE_PM4U,
+        "pp1" => &PROFILE_PP1,
+        "pp1m" => &PROFILE_PP1M,
         _ => &PROFILE_PM7M,
     }
 }
@@ -518,5 +560,41 @@ mod tests {
         let job = make_job("{}");
         let build = parse_afz_build_model(&job);
         assert_eq!(build.key_suffix, "pm7m");
+    }
+
+    #[test]
+    fn build_model_resolves_pp1_from_format_version() {
+        let job = make_job_with_version("{}", Some("pp1"));
+        let build = parse_afz_build_model(&job);
+        assert_eq!(build.key_suffix, "pp1");
+        assert_eq!(build.machine_name, "Anycubic Photon P1");
+    }
+
+    #[test]
+    fn pp1_profile_has_bumped_max_file_version() {
+        let profile = machine_profile_for_suffix("pp1");
+        assert_eq!(profile.max_file_version, 519);
+    }
+
+    #[test]
+    fn build_model_resolves_pp1m_from_format_version() {
+        let job = make_job_with_version("{}", Some("pp1m"));
+        let build = parse_afz_build_model(&job);
+        assert_eq!(build.key_suffix, "pp1m");
+        assert_eq!(build.machine_name, "Anycubic Photon P1 Max");
+    }
+
+    #[test]
+    fn pp1m_profile_has_bumped_max_file_version() {
+        let profile = machine_profile_for_suffix("pp1m");
+        assert_eq!(profile.max_file_version, 519);
+    }
+
+    #[test]
+    fn existing_profiles_keep_max_file_version_518() {
+        for suffix in ["pm7m", "pwsz", "pm7", "pm4u"] {
+            let profile = machine_profile_for_suffix(suffix);
+            assert_eq!(profile.max_file_version, 518, "{} should have max_file_version 518", suffix);
+        }
     }
 }

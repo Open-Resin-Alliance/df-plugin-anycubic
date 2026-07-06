@@ -1,0 +1,212 @@
+[
+  {
+    "presetId": "anycubic-photon-mono-4-ultra-pm4u",
+    "profileVersion": 1,
+    "manufacturer": "Anycubic",
+    "family": "Photon Mono",
+    "name": "Photon Mono 4 Ultra",
+    "imageAssetPath": "./assets/photon-mono/photon-mono-4-ultra.png",
+    "antiAliasing": true,
+    "hasCamera": false,
+    "networkSupport": null,
+    "networkFilter": "Photon Mono 4 Ultra",
+    "buildVolumeMm": {
+      "width": 153.408,
+      "depth": 87.04,
+      "height": 165
+    },
+    "pixelSize": {
+      "x": 17,
+      "y": 17
+    },
+    "display": {
+      "resolutionX": 9024,
+      "resolutionY": 5120,
+      "outputFormat": ".azf",
+      "formatVersion": "pm4u",
+      "settingsMode": "simple",
+      "mirrorX": false,
+      "mirrorY": false
+    }
+  },
+  {
+    "presetId": "anycubic-photon-mono-pwmo",
+    "profileVersion": 1,
+    "manufacturer": "Anycubic",
+    "family": "Photon Mono",
+    "name": "Photon Mono",
+    "imageAssetPath": "./assets/photon-mono/photon-mono.png",
+    "antiAliasing": true,
+    "hasCamera": false,
+    "networkSupport": null,
+    "networkFilter": "Photon Mono",
+    "buildVolumeMm": {
+      "width": 82.62,
+      "depth": 130.56,
+      "height": 165
+    },
+    "pixelSize": {
+      "x": 51,
+      "y": 51
+    },
+    "display": {
+      "resolutionX": 1620,
+      "resolutionY": 2560,
+      "outputFormat": ".aff",
+      "formatVersion": "pwmo",
+      "settingsMode": "simple",
+      "mirrorX": false,
+      "mirrorY": false
+    }
+  },
+  {
+    "presetId": "anycubic-photon-mono-2-pm3n",
+    "profileVersion": 1,
+    "manufacturer": "Anycubic",
+    "family": "Photon Mono",
+    "name": "Photon Mono 2",
+    "imageAssetPath": "./assets/photon-mono/photon-mono-2.png",
+    "antiAliasing": true,
+    "hasCamera": false,
+    "networkSupport": null,
+    "networkFilter": "Photon Mono 2",
+    "buildVolumeMm": {
+      "width": 143.36,
+      "depth": 89.6,
+      "height": 165
+    },
+    "pixelSize": {
+      "x": 35,
+      "y": 35
+    },
+    "display": {
+      "resolutionX": 4096,
+      "resolutionY": 2560,
+      "outputFormat": ".aff",
+      "formatVersion": "pm3n",
+      "settingsMode": "simple",
+      "mirrorX": false,
+      "mirrorY": false
+    }
+  },
+  {
+    "presetId": "anycubic-photon-mono-4-pm4n",
+    "profileVersion": 1,
+    "manufacturer": "Anycubic",
+    "family": "Photon Mono",
+    "name": "Photon Mono 4",
+    "imageAssetPath": "./assets/photon-mono/photon-mono-4.png",
+    "antiAliasing": true,
+    "hasCamera": false,
+    "networkSupport": null,
+    "networkFilter": "Photon Mono 4",
+    "buildVolumeMm": {
+      "width": 153.408,
+      "depth": 87.04,
+      "height": 165
+    },
+    "pixelSize": {
+      "x": 17,
+      "y": 17
+    },
+    "display": {
+      "resolutionX": 9024,
+      "resolutionY": 5120,
+      "outputFormat": ".aff",
+      "formatVersion": "pm4n",
+      "settingsMode": "simple",
+      "mirrorX": false,
+      "mirrorY": false
+    }
+  },
+  {
+    "presetId": "anycubic-photon-mono-se-pwms",
+    "profileVersion": 1,
+    "manufacturer": "Anycubic",
+    "family": "Photon Mono",
+    "name": "Photon Mono SE",
+    "imageAssetPath": "./assets/photon-mono/photon-mono-se.png",
+    "antiAliasing": true,
+    "hasCamera": false,
+    "networkSupport": null,
+    "networkFilter": "Photon Mono SE",
+    "buildVolumeMm": {
+      "width": 82.62,
+      "depth": 130.56,
+      "height": 160
+    },
+    "pixelSize": {
+      "x": 51,
+      "y": 51
+    },
+    "display": {
+      "resolutionX": 1620,
+      "resolutionY": 2560,
+      "outputFormat": ".aff",
+      "formatVersion": "pwms",
+      "settingsMode": "simple",
+      "mirrorX": false,
+      "mirrorY": false
+    }
+  },
+  {
+    "presetId": "anycubic-photon-mono-4k-pwma",
+    "profileVersion": 1,
+    "manufacturer": "Anycubic",
+    "family": "Photon Mono",
+    "name": "Photon Mono 4K",
+    "imageAssetPath": "./assets/photon-mono/photon-mono-4k.png",
+    "antiAliasing": true,
+    "hasCamera": false,
+    "networkSupport": null,
+    "networkFilter": "Photon Mono 4K",
+    "buildVolumeMm": {
+      "width": 134.4,
+      "depth": 84,
+      "height": 165
+    },
+    "pixelSize": {
+      "x": 35,
+      "y": 35
+    },
+    "display": {
+      "resolutionX": 3840,
+      "resolutionY": 2400,
+      "outputFormat": ".aff",
+      "formatVersion": "pwma",
+      "settingsMode": "simple",
+      "mirrorX": false,
+      "mirrorY": false
+    }
+  },
+  {
+    "presetId": "anycubic-photon-mono-sq-pmsq",
+    "profileVersion": 1,
+    "manufacturer": "Anycubic",
+    "family": "Photon Mono",
+    "name": "Photon Mono SQ",
+    "imageAssetPath": "./assets/photon-mono/photon-mono-sq.png",
+    "antiAliasing": true,
+    "hasCamera": false,
+    "networkSupport": null,
+    "networkFilter": "Photon Mono SQ",
+    "buildVolumeMm": {
+      "width": 120,
+      "depth": 128,
+      "height": 200
+    },
+    "pixelSize": {
+      "x": 50,
+      "y": 50
+    },
+    "display": {
+      "resolutionX": 2400,
+      "resolutionY": 2560,
+      "outputFormat": ".aff",
+      "formatVersion": "pmsq",
+      "settingsMode": "simple",
+      "mirrorX": false,
+      "mirrorY": false
+    }
+  }
+]
