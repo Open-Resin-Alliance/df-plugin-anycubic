@@ -319,12 +319,16 @@ pub(super) fn parse_afz_build_model(job: &SliceJobV3) -> AfzBuildModel {
     let twostage = settings_mode.eq_ignore_ascii_case("twostage");
 
     // Derive the machine key suffix from the most specific source available:
-    // 1. Explicit `anycubic.keySuffix` override in metadata (if set)
-    // 2. Printer output format extension from the selected printer profile
+    // 1. `job.format_version` (set by printer profile display.formatVersion) — preferred
+    // 2. Explicit `anycubic.keySuffix` override in metadata (legacy fallback)
+    // 3. Printer output format extension from the selected printer profile
     //    (e.g. ".pwsz" → "pwsz", ".pm7m" → "pm7m")
-    // 3. Fall back to "pm7m" only when neither is present
-    let key_suffix = anycubic
-        .and_then(|a| get_str(a, "keySuffix"))
+    // 4. Fall back to "pm7m" only when none of the above are present
+    let key_suffix = job
+        .format_version
+        .as_deref()
+        .filter(|v| !v.is_empty())
+        .or_else(|| anycubic.and_then(|a| get_str(a, "keySuffix")))
         .or_else(|| {
             printer
                 .and_then(|p| get_str(p, "outputFormat"))
@@ -335,8 +339,10 @@ pub(super) fn parse_afz_build_model(job: &SliceJobV3) -> AfzBuildModel {
 
     let profile = machine_profile_for_suffix(&key_suffix);
 
-    eprintln!("[AFZ] key_suffix={key_suffix:?}, machine={:?}, pixel_size={:?}",
-        anycubic.and_then(|a| get_str(a, "machineName"))
+    eprintln!(
+        "[AFZ] key_suffix={key_suffix:?}, machine={:?}, pixel_size={:?}",
+        anycubic
+            .and_then(|a| get_str(a, "machineName"))
             .or_else(|| printer.and_then(|p| get_str(p, "machineName"))),
         printer.and_then(|p| p.get("pixelSize")),
     );
@@ -430,5 +436,79 @@ pub(super) fn parse_afz_build_model(job: &SliceJobV3) -> AfzBuildModel {
         resin_setting_name,
         target_temperature,
         intelligent_release,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_job(metadata: &str) -> SliceJobV3 {
+        make_job_with_version(metadata, None)
+    }
+
+    fn make_job_with_version(metadata: &str, format_version: Option<&str>) -> SliceJobV3 {
+        SliceJobV3 {
+            output_format: ".azf".to_string(),
+            format_version: format_version.map(|v| v.to_string()),
+            source_width_px: 4,
+            source_height_px: 4,
+            width_px: 4,
+            height_px: 4,
+            build_width_mm: 10.0,
+            build_depth_mm: 20.0,
+            layer_height_mm: 0.05,
+            total_layers: 1,
+            export_thumbnail_png_base64: None,
+            png_compression_strategy: "balanced".to_string(),
+            container_compression_level: 2,
+            anti_aliasing_level: "Off".to_string(),
+            aa_on_supports: false,
+            minimum_aa_alpha_percent: 35.0,
+            mirror_x: false,
+            mirror_y: false,
+            triangles_xyz: vec![],
+            metadata_json: metadata.to_string(),
+            x_packing_mode: "none".to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn build_model_reads_format_version_primary() {
+        let job = make_job_with_version("{}", Some("pm4u"));
+        let build = parse_afz_build_model(&job);
+        assert_eq!(build.key_suffix, "pm4u");
+        assert_eq!(build.machine_name, "Anycubic Photon Mono 4 Ultra");
+    }
+
+    #[test]
+    fn build_model_format_version_takes_priority_over_keysuffix() {
+        let job = make_job_with_version(r#"{"anycubic":{"keySuffix":"pm7m"}}"#, Some("pm4u"));
+        let build = parse_afz_build_model(&job);
+        assert_eq!(build.key_suffix, "pm4u");
+        assert_eq!(build.machine_name, "Anycubic Photon Mono 4 Ultra");
+    }
+
+    #[test]
+    fn build_model_falls_back_to_keysuffix() {
+        let job = make_job(r#"{"anycubic":{"keySuffix":"pm4u"}}"#);
+        let build = parse_afz_build_model(&job);
+        assert_eq!(build.key_suffix, "pm4u");
+    }
+
+    #[test]
+    fn build_model_falls_back_to_printer_output_format() {
+        let job = make_job(r#"{"printer":{"outputFormat":".pwsz"}}"#);
+        let build = parse_afz_build_model(&job);
+        assert_eq!(build.key_suffix, "pwsz");
+        assert_eq!(build.machine_name, "Anycubic Photon Mono M7 Pro");
+    }
+
+    #[test]
+    fn build_model_uses_default_when_nothing_set() {
+        let job = make_job("{}");
+        let build = parse_afz_build_model(&job);
+        assert_eq!(build.key_suffix, "pm7m");
     }
 }

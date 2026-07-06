@@ -408,8 +408,13 @@ pub(super) fn parse_aff_build_model(job: &SliceJobV3) -> AffBuildModel {
     let printer = meta.as_ref().and_then(|m| m.get("printer"));
     let build_volume = printer.and_then(|p| p.get("buildVolumeMm"));
 
-    let key_suffix = anycubic
-        .and_then(|a| get_str(a, "keySuffix"))
+    // Prefer format_version from the job (set by printer profile display.formatVersion),
+    // falling back to the legacy anycubic.keySuffix metadata field for backward compatibility.
+    let key_suffix = job
+        .format_version
+        .as_deref()
+        .filter(|v| !v.is_empty())
+        .or_else(|| anycubic.and_then(|a| get_str(a, "keySuffix")))
         .unwrap_or("pwmo")
         .to_string();
 
@@ -462,9 +467,13 @@ mod parser_tests {
     use super::*;
 
     fn make_job(metadata: &str) -> SliceJobV3 {
+        make_job_with_version(metadata, None)
+    }
+
+    fn make_job_with_version(metadata: &str, format_version: Option<&str>) -> SliceJobV3 {
         SliceJobV3 {
             output_format: ".aff".to_string(),
-            format_version: None,
+            format_version: format_version.map(|v| v.to_string()),
             source_width_px: 4,
             source_height_px: 4,
             width_px: 4,
@@ -486,6 +495,27 @@ mod parser_tests {
             x_packing_mode: "none".to_string(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn build_model_reads_format_version_primary() {
+        let job = make_job_with_version("{}", Some("pm5s"));
+        let build = parse_aff_build_model(&job);
+        assert_eq!(build.key_suffix, "pm5s");
+        assert_eq!(build.machine_name, "Photon Mono M5s");
+    }
+
+    #[test]
+    fn build_model_format_version_takes_priority_over_keysuffix() {
+        // When both format_version and anycubic.keySuffix are present,
+        // format_version must win.
+        let job = make_job_with_version(
+            r#"{"anycubic":{"keySuffix":"pwmo"}}"#,
+            Some("pm3m"),
+        );
+        let build = parse_aff_build_model(&job);
+        assert_eq!(build.key_suffix, "pm3m");
+        assert_eq!(build.machine_name, "Photon M3 Max");
     }
 
     #[test]

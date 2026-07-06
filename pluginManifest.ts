@@ -44,6 +44,9 @@ export const ANYCUBIC_PLUGIN_MANIFEST = {
         resolutionX,
         resolutionY,
         outputFormat: String(preset.display?.outputFormat),
+        formatVersion: typeof preset.display?.formatVersion === 'string'
+          ? preset.display.formatVersion.trim().toLowerCase()
+          : undefined,
       },
     };
   }) as PrinterPreset[],
