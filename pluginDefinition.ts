@@ -9,7 +9,9 @@ import { ANYCUBIC_AZF_FORMAT_DEFINITION } from './slicing/azfFormatDefinition';
 
 // ─── Local material settings adapters (per mode) ─────────────────────
 
-const ANYCUBIC_SIMPLE_SETTINGS_BASE = {
+type AnycubicModeSettingsSchema = Omit<PluginLocalMaterialSettingsAdapterContract, 'outputFormat'>;
+
+const ANYCUBIC_SIMPLE_SETTINGS_BASE: AnycubicModeSettingsSchema = {
   displayName: 'Anycubic Resin Settings',
   replacesDefaultMaterialSettings: true,
   tabs: [
@@ -146,9 +148,9 @@ const ANYCUBIC_SIMPLE_SETTINGS_BASE = {
       metadataPath: 'material.targetTemperatureC',
     },
   ],
-} as const;
+};
 
-const ANYCUBIC_TWOSTAGE_SETTINGS_BASE = {
+const ANYCUBIC_TWOSTAGE_SETTINGS_BASE: AnycubicModeSettingsSchema = {
   displayName: 'Anycubic Resin Settings',
   replacesDefaultMaterialSettings: true,
   tabs: [
@@ -400,12 +402,12 @@ const ANYCUBIC_TWOSTAGE_SETTINGS_BASE = {
       metadataPath: 'material.targetTemperatureC',
     },
   ],
-} as const;
+};
 
 // ─── Per-format adapters (keyed by mode) ─────────────────────────────
 
 function withoutField(
-  base: typeof ANYCUBIC_SIMPLE_SETTINGS_BASE | typeof ANYCUBIC_TWOSTAGE_SETTINGS_BASE,
+  base: AnycubicModeSettingsSchema,
   fieldKey: string,
 ) {
   return { ...base, fields: base.fields.filter((f) => f.key !== fieldKey) };
