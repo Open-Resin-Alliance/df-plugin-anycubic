@@ -409,11 +409,13 @@ pub(super) fn parse_aff_build_model(job: &SliceJobV3) -> AffBuildModel {
     let build_volume = printer.and_then(|p| p.get("buildVolumeMm"));
 
     // Prefer format_version from the job (set by printer profile display.formatVersion),
-    // falling back to the legacy anycubic.keySuffix metadata field for backward compatibility.
+    // falling back to printer.formatVersion in metadata, then the legacy
+    // anycubic.keySuffix metadata field for backward compatibility.
     let key_suffix = job
         .format_version
         .as_deref()
         .filter(|v| !v.is_empty())
+        .or_else(|| printer.and_then(|p| get_str(p, "formatVersion")))
         .or_else(|| anycubic.and_then(|a| get_str(a, "keySuffix")))
         .unwrap_or("pwmo")
         .to_string();
@@ -524,6 +526,25 @@ mod parser_tests {
         let build = parse_aff_build_model(&job);
         assert_eq!(build.key_suffix, "pm3m");
         assert_eq!(build.machine_name, "Photon M3 Max");
+    }
+
+    #[test]
+    fn build_model_falls_back_to_printer_format_version() {
+        let job = make_job(r#"{"printer":{"formatVersion":"dl2p"}}"#);
+        let build = parse_aff_build_model(&job);
+        assert_eq!(build.key_suffix, "dl2p");
+        assert_eq!(build.machine_name, "Photon D2");
+    }
+
+    #[test]
+    fn build_model_ignores_printer_name_for_machine_name() {
+        // The raster manifest's printer.name is a user-customizable display name.
+        // The machine name written into the file must be the canonical hardware name
+        // from the profile constant, otherwise firmware may reject the file.
+        let job = make_job(r#"{"printer":{"name":"My Custom Printer","formatVersion":"pm5"}}"#);
+        let build = parse_aff_build_model(&job);
+        assert_eq!(build.key_suffix, "pm5");
+        assert_eq!(build.machine_name, "Photon Mono M5"); // canonical, not "My Custom Printer"
     }
 
     #[test]

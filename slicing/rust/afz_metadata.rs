@@ -320,14 +320,16 @@ pub(super) fn parse_afz_build_model(job: &SliceJobV3) -> AfzBuildModel {
 
     // Derive the machine key suffix from the most specific source available:
     // 1. `job.format_version` (set by printer profile display.formatVersion) — preferred
-    // 2. Explicit `anycubic.keySuffix` override in metadata (legacy fallback)
-    // 3. Printer output format extension from the selected printer profile
+    // 2. `printer.formatVersion` in metadata (set by the raster manifest)
+    // 3. Explicit `anycubic.keySuffix` override in metadata (legacy fallback)
+    // 4. Printer output format extension from the selected printer profile
     //    (e.g. ".pwsz" → "pwsz", ".pm7m" → "pm7m")
-    // 4. Fall back to "pm7m" only when none of the above are present
+    // 5. Fall back to "pm7m" only when none of the above are present
     let key_suffix = job
         .format_version
         .as_deref()
         .filter(|v| !v.is_empty())
+        .or_else(|| printer.and_then(|p| get_str(p, "formatVersion")))
         .or_else(|| anycubic.and_then(|a| get_str(a, "keySuffix")))
         .or_else(|| {
             printer
@@ -350,12 +352,10 @@ pub(super) fn parse_afz_build_model(job: &SliceJobV3) -> AfzBuildModel {
     // Read machine name from metadata, falling back through available keys:
     // 1. anycubic.machineName (explicit override)
     // 2. printer.machineName (canonical metadata key)
-    // 3. printer.name (currently emitted by the frontend manifest)
-    // 4. Profile constant derived from key_suffix
+    // 3. Profile constant derived from key_suffix (ensures firmware-compatible name)
     let machine_name = anycubic
         .and_then(|a| get_str(a, "machineName"))
         .or_else(|| printer.and_then(|p| get_str(p, "machineName")))
-        .or_else(|| printer.and_then(|p| get_str(p, "name")))
         .unwrap_or(profile.machine_name)
         .to_string();
 
@@ -488,6 +488,14 @@ mod tests {
         let build = parse_afz_build_model(&job);
         assert_eq!(build.key_suffix, "pm4u");
         assert_eq!(build.machine_name, "Anycubic Photon Mono 4 Ultra");
+    }
+
+    #[test]
+    fn build_model_falls_back_to_printer_format_version() {
+        let job = make_job(r#"{"printer":{"formatVersion":"pwsz"}}"#);
+        let build = parse_afz_build_model(&job);
+        assert_eq!(build.key_suffix, "pwsz");
+        assert_eq!(build.machine_name, "Anycubic Photon Mono M7 Pro");
     }
 
     #[test]
