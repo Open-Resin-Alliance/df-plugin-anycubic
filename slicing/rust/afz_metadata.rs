@@ -318,8 +318,18 @@ pub(super) fn parse_afz_build_model(job: &SliceJobV3) -> AfzBuildModel {
         .unwrap_or("simple");
     let twostage = settings_mode.eq_ignore_ascii_case("twostage");
 
+    // Derive the machine key suffix from the most specific source available:
+    // 1. Explicit `anycubic.keySuffix` override in metadata (if set)
+    // 2. Printer output format extension from the selected printer profile
+    //    (e.g. ".pwsz" → "pwsz", ".pm7m" → "pm7m")
+    // 3. Fall back to "pm7m" only when neither is present
     let key_suffix = anycubic
         .and_then(|a| get_str(a, "keySuffix"))
+        .or_else(|| {
+            printer
+                .and_then(|p| get_str(p, "outputFormat"))
+                .map(|s| s.trim_start_matches('.'))
+        })
         .unwrap_or("pm7m")
         .to_string();
 
@@ -331,9 +341,15 @@ pub(super) fn parse_afz_build_model(job: &SliceJobV3) -> AfzBuildModel {
         printer.and_then(|p| p.get("pixelSize")),
     );
 
+    // Read machine name from metadata, falling back through available keys:
+    // 1. anycubic.machineName (explicit override)
+    // 2. printer.machineName (canonical metadata key)
+    // 3. printer.name (currently emitted by the frontend manifest)
+    // 4. Profile constant derived from key_suffix
     let machine_name = anycubic
         .and_then(|a| get_str(a, "machineName"))
         .or_else(|| printer.and_then(|p| get_str(p, "machineName")))
+        .or_else(|| printer.and_then(|p| get_str(p, "name")))
         .unwrap_or(profile.machine_name)
         .to_string();
 
