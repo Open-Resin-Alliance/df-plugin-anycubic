@@ -434,7 +434,8 @@ pub(super) fn write_software_body(out: &mut Cursor<Vec<u8>>) -> std::io::Result<
     write_padded_string(out, "DragonFruit", 32)?;                 // SoftwareName
     write_u32_le(out, SOFTWARE_TABLE_LENGTH)?;                    // TableLength (self-describing)
     write_padded_string(out, "1.0.0", 32)?;                       // Version
-    write_padded_string(out, "rust-windows", 64)?;                // OperativeSystem
+    let os_tag = format!("rust-{}-{}", std::env::consts::OS, std::env::consts::ARCH);
+    write_padded_string(out, &os_tag, 64)?;                         // OperativeSystem
     write_padded_string(out, "3.3-CoreProfile", 32)?;             // OpenGLVersion
     let written = out.position() - start;
     debug_assert_eq!(written, SOFTWARE_TABLE_LENGTH as u64);
@@ -785,8 +786,7 @@ pub(super) fn build_aff_container(
     // 3. Preview (raw RGB565)
     let prev_w = profile.preview_size[0];
     let prev_h = profile.preview_size[1];
-    let preview_pixels = build_preview_rgb565(job.export_thumbnail_png_base64.as_deref(), prev_w, prev_h)
-        .unwrap_or_else(|| vec![0u8; (prev_w * prev_h * 2) as usize]);
+    let preview_pixels = build_preview_rgb565(job.export_thumbnail_png_base64.as_deref(), prev_w, prev_h);
     addresses.preview = cursor.position() as u32;
     // Preview is IncludeBaseTableLength=true: TableLength field = whole table (body + 16).
     write_named_table_header(&mut cursor, "PREVIEW", preview_body_length(prev_w, prev_h) + 16)?;
@@ -851,8 +851,7 @@ pub(super) fn build_aff_container(
     if version >= 518 {
         let p2w = profile.preview2_size[0];
         let p2h = profile.preview2_size[1];
-        let p2_pixels = build_preview_rgb565(job.export_thumbnail_png_base64.as_deref(), p2w, p2h)
-            .unwrap_or_else(|| vec![0u8; (p2w * p2h * 2) as usize]);
+        let p2_pixels = build_preview_rgb565(job.export_thumbnail_png_base64.as_deref(), p2w, p2h);
         addresses.preview2 = cursor.position() as u32;
         // Preview2 is IncludeBaseTableLength=true: TableLength field = whole table (body + 16).
         write_named_table_header(&mut cursor, "PREVIEW2", preview2_body_length(p2w, p2h) + 16)?;

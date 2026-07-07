@@ -98,19 +98,13 @@ pub(super) fn build_afz_container(
     zip.start_file(SOFTWARE_INFO_FILE, options)?;
     zip.write_all(software_json.as_bytes())?;
 
-    // 4. Previews
-    if let Some(ref png) = preview_1 {
-        zip.start_file("preview_images/preview_0.png", options)?;
-        zip.write_all(png)?;
-    }
-    if let Some(ref png) = preview_2 {
-        zip.start_file("preview_images/preview_1.png", options)?;
-        zip.write_all(png)?;
-    }
-    if let Some(ref png) = preview_3 {
-        zip.start_file("preview_images/preview_2.png", options)?;
-        zip.write_all(png)?;
-    }
+    // 4. Previews (always written — gradient fallback when no thumbnail provided)
+    zip.start_file("preview_images/preview_0.png", options)?;
+    zip.write_all(&preview_1)?;
+    zip.start_file("preview_images/preview_1.png", options)?;
+    zip.write_all(&preview_2)?;
+    zip.start_file("preview_images/preview_2.png", options)?;
+    zip.write_all(&preview_3)?;
 
     // 5. Layers controller
     let layers_json = build_layers_controller_json(timing, layers);

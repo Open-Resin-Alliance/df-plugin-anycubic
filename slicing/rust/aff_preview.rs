@@ -3,8 +3,11 @@
 //! Unlike AZF (which stores PNGs inside the ZIP), AFF previews are raw
 //! 16-bit-per-pixel buffers laid down right after the Preview/Preview2 table
 //! headers. Pack format: R5 (high), G6 (mid), B5 (low), little-endian.
+//!
+//! When no thumbnail PNG is provided by the job, a dithered diagonal gradient
+//! (dark purple → dark green, matching CTB/Elegoo) is generated as a fallback.
 
-use super::anycubic_preview_common::{decode_base64, decode_png_rgb8, resize_rgb_nearest};
+use super::anycubic_preview_common::{decode_base64, decode_png_rgb8, gradient_preview_rgb, resize_rgb_nearest};
 
 pub(super) fn pack_rgb565_le(rgb: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(rgb.len() / 3 * 2);
@@ -20,17 +23,21 @@ pub(super) fn pack_rgb565_le(rgb: &[u8]) -> Vec<u8> {
 
 /// Decode the base64-encoded PNG thumbnail in the job, resize it to the
 /// requested dimensions, and pack as RGB565 little-endian.
-/// Returns None if source is missing/empty or decode fails.
+/// Returns a dithered gradient fallback when no thumbnail is provided.
 pub(super) fn build_preview_rgb565(
     base64_source: Option<&str>,
     target_w: u32,
     target_h: u32,
-) -> Option<Vec<u8>> {
-    let src = base64_source.filter(|s| !s.is_empty())?;
-    let png_bytes = decode_base64(src).ok()?;
-    let (sw, sh, rgb) = decode_png_rgb8(&png_bytes).ok()?;
-    let resized = resize_rgb_nearest(sw, sh, &rgb, target_w, target_h);
-    Some(pack_rgb565_le(&resized))
+) -> Vec<u8> {
+    if let Some(src) = base64_source.filter(|s| !s.is_empty()) {
+        if let Ok(png_bytes) = decode_base64(src) {
+            if let Ok((sw, sh, rgb)) = decode_png_rgb8(&png_bytes) {
+                let resized = resize_rgb_nearest(sw, sh, &rgb, target_w, target_h);
+                return pack_rgb565_le(&resized);
+            }
+        }
+    }
+    pack_rgb565_le(&gradient_preview_rgb(target_w, target_h))
 }
 
 #[cfg(test)]

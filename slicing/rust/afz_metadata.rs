@@ -257,6 +257,10 @@ fn get_bool(v: &Value, key: &str) -> Option<bool> {
 //  Parsers
 // ═══════════════════════════════════════════════════════════════════
 
+fn sanitize_non_negative(v: f32) -> f32 {
+    if v.is_finite() && v >= 0.0 { v } else { 0.0 }
+}
+
 /// Extract the AFZ timing model from `job.metadata_json`.
 ///
 /// Looks under `metadata_json.material.*` for timing values (same as CTB),
@@ -273,19 +277,15 @@ pub(super) fn parse_afz_timing_model(job: &SliceJobV3) -> AfzTimingModel {
     let twostage = settings_mode.eq_ignore_ascii_case("twostage");
 
     let f = |section: Option<&Value>, key: &str| -> Option<f32> {
-        section.and_then(|s| get_f32(s, key))
+        section.and_then(|s| get_f32(s, key)).map(sanitize_non_negative)
     };
 
     let bottom_layer_count = material
         .and_then(|m| get_u32(m, "bottomLayerCount"))
         .unwrap_or(4);
 
-    let normal_exposure = material
-        .and_then(|m| get_f32(m, "normalExposureSec"))
-        .unwrap_or(2.0);
-    let bottom_exposure = material
-        .and_then(|m| get_f32(m, "bottomExposureSec"))
-        .unwrap_or(30.0);
+    let normal_exposure = f(material, "normalExposureSec").unwrap_or(2.0);
+    let bottom_exposure = f(material, "bottomExposureSec").unwrap_or(30.0);
 
     let wait_time = f(material, "waitTimeBeforeCureSec")
         .or_else(|| f(material, "lightOffDelaySec"))
@@ -293,10 +293,12 @@ pub(super) fn parse_afz_timing_model(job: &SliceJobV3) -> AfzTimingModel {
 
     // Speeds in metadata are mm/min; AFZ needs mm/s
     let speed = |section: Option<&Value>, key: &str, default_mm_min: f32| -> f32 {
-        section
-            .and_then(|s| get_f32(s, key))
-            .unwrap_or(default_mm_min)
-            * MM_MIN_TO_MM_SEC
+        sanitize_non_negative(
+            section
+                .and_then(|s| get_f32(s, key))
+                .unwrap_or(default_mm_min)
+                * MM_MIN_TO_MM_SEC,
+        )
     };
 
     let lift_height = f(material, "liftDistanceMm").unwrap_or(5.0);
@@ -327,7 +329,7 @@ pub(super) fn parse_afz_timing_model(job: &SliceJobV3) -> AfzTimingModel {
         normal_exposure_sec: normal_exposure,
         bottom_exposure_sec: bottom_exposure,
         bottom_layer_count,
-        layer_height_mm: job.layer_height_mm,
+        layer_height_mm: sanitize_non_negative(job.layer_height_mm),
         wait_time_before_cure_sec: wait_time,
         bottom_lift_height_mm: bottom_lift_height,
         bottom_lift_speed_mm_s: bottom_lift_speed,
@@ -382,14 +384,6 @@ pub(super) fn parse_afz_build_model(job: &SliceJobV3) -> AfzBuildModel {
         .to_string();
 
     let profile = machine_profile_for_suffix(&key_suffix);
-
-    eprintln!(
-        "[AFZ] key_suffix={key_suffix:?}, machine={:?}, pixel_size={:?}",
-        anycubic
-            .and_then(|a| get_str(a, "machineName"))
-            .or_else(|| printer.and_then(|p| get_str(p, "machineName"))),
-        printer.and_then(|p| p.get("pixelSize")),
-    );
 
     // Read machine name from metadata, falling back through available keys:
     // 1. anycubic.machineName (explicit override)

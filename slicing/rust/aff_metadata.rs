@@ -222,7 +222,7 @@ pub(super) fn machine_profile_for_suffix(suffix: &str) -> &'static AffMachinePro
         "pm5s" => &PROFILE_PM5S,
         "m5sp" => &PROFILE_M5SP,
         other  => {
-            eprintln!("[AFF] unknown keySuffix {other:?}, defaulting to Mono profile");
+            // Unknown key suffix — default to Photon Mono profile.
             &PROFILE_PWMO
         }
     }
@@ -331,20 +331,32 @@ fn get_str<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
     v.get(key).and_then(Value::as_str)
 }
 
+fn sanitize_non_negative(v: f32) -> f32 {
+    if v.is_finite() && v >= 0.0 { v } else { 0.0 }
+}
+
 pub(super) fn parse_aff_timing_model(job: &SliceJobV3) -> AffTimingModel {
     let meta = parse_json(&job.metadata_json);
     let material = meta.as_ref().and_then(|m| m.get("material"));
     let anycubic = meta.as_ref().and_then(|m| m.get("anycubic"));
+    let printer = meta.as_ref().and_then(|m| m.get("printer"));
+
+    let settings_mode = printer
+        .and_then(|p| get_str(p, "settingsMode"))
+        .unwrap_or("simple");
+    let twostage = settings_mode.eq_ignore_ascii_case("twostage");
 
     let f = |section: Option<&Value>, key: &str| -> Option<f32> {
-        section.and_then(|s| get_f32(s, key))
+        section.and_then(|s| get_f32(s, key)).map(sanitize_non_negative)
     };
 
     let speed = |section: Option<&Value>, key: &str, default_mm_min: f32| -> f32 {
-        section
-            .and_then(|s| get_f32(s, key))
-            .unwrap_or(default_mm_min)
-            * MM_MIN_TO_MM_SEC
+        sanitize_non_negative(
+            section
+                .and_then(|s| get_f32(s, key))
+                .unwrap_or(default_mm_min)
+                * MM_MIN_TO_MM_SEC,
+        )
     };
 
     let bottom_layer_count = material
@@ -383,20 +395,20 @@ pub(super) fn parse_aff_timing_model(job: &SliceJobV3) -> AffTimingModel {
         normal_exposure_sec: normal_exposure,
         bottom_exposure_sec: bottom_exposure,
         bottom_layer_count,
-        layer_height_mm: job.layer_height_mm,
+        layer_height_mm: sanitize_non_negative(job.layer_height_mm),
         wait_time_before_cure_sec: wait_time,
         lift_height_mm: lift_height,
         lift_speed_mm_s: lift_speed,
         retract_speed_mm_s: retract_speed,
-        lift_height2_mm: lift_height2,
-        lift_speed2_mm_s: lift_speed2,
-        retract_speed2_mm_s: retract_speed2,
+        lift_height2_mm: if twostage { lift_height2 } else { 0.0 },
+        lift_speed2_mm_s: if twostage { lift_speed2 } else { 0.0 },
+        retract_speed2_mm_s: if twostage { retract_speed2 } else { 0.0 },
         bottom_lift_height_mm: bottom_lift_height,
         bottom_lift_speed_mm_s: bottom_lift_speed,
         bottom_retract_speed_mm_s: bottom_retract_speed,
-        bottom_lift_height2_mm: bottom_lift_height2,
-        bottom_lift_speed2_mm_s: bottom_lift_speed2,
-        bottom_retract_speed2_mm_s: bottom_retract_speed2,
+        bottom_lift_height2_mm: if twostage { bottom_lift_height2 } else { 0.0 },
+        bottom_lift_speed2_mm_s: if twostage { bottom_lift_speed2 } else { 0.0 },
+        bottom_retract_speed2_mm_s: if twostage { bottom_retract_speed2 } else { 0.0 },
         transition_layer_count,
         anti_alias_level: aa_level.clamp(1, 16),
     }

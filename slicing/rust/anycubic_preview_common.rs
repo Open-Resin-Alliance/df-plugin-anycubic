@@ -3,6 +3,9 @@
 //! Both formats accept a base64-encoded PNG thumbnail from the job, decode it,
 //! and resize it to a target dimension. Only the final pack format differs
 //! (AZF re-encodes as PNG; AFF packs as raw RGB565 little-endian).
+//!
+//! When no thumbnail is provided, a dithered diagonal gradient (dark purple →
+//! dark green) is generated as a fallback, matching CTB/Elegoo behaviour.
 
 use crate::engine::SlicerV3Error;
 use base64::Engine;
@@ -92,6 +95,41 @@ pub(super) fn resize_rgb_nearest(
             let si = (sy * src_w as usize + sx) * 3;
             let di = (y as usize * dst_w as usize + x as usize) * 3;
             out[di..di + 3].copy_from_slice(&src[si..si + 3]);
+        }
+    }
+    out
+}
+
+/// Generate a dithered diagonal gradient fallback preview (RGB888).
+/// Dark dragonfruit purple → dark dragonfruit green, Bayer 4×4 dithering.
+pub(super) fn gradient_preview_rgb(w: u32, h: u32) -> Vec<u8> {
+    let gradient_start = [32u32, 10u32, 42u32];
+    let gradient_end = [14u32, 34u32, 14u32];
+    let bayer4x4: [[i32; 4]; 4] = [
+        [0, 8, 2, 10],
+        [12, 4, 14, 6],
+        [3, 11, 1, 9],
+        [15, 7, 13, 5],
+    ];
+
+    let dither_u8 = |v: u32, d: i32| -> u8 {
+        let offset = (d - 8) * 3 / 8;
+        (v as i32 + offset).clamp(0, 255) as u8
+    };
+
+    let denom = (w as u64 + h as u64).max(1);
+    let mut out = Vec::with_capacity((w * h * 3) as usize);
+
+    for y in 0..h {
+        for x in 0..w {
+            let dither = bayer4x4[(y as usize) & 3][(x as usize) & 3];
+            let t = ((x as u64 + y as u64) * 255 / denom) as u32;
+            let r = ((gradient_start[0] * (255 - t) + gradient_end[0] * t) / 255) as u32;
+            let g = ((gradient_start[1] * (255 - t) + gradient_end[1] * t) / 255) as u32;
+            let b = ((gradient_start[2] * (255 - t) + gradient_end[2] * t) / 255) as u32;
+            out.push(dither_u8(r, dither));
+            out.push(dither_u8(g, dither));
+            out.push(dither_u8(b, dither));
         }
     }
     out
