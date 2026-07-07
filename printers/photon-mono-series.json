@@ -131,8 +131,8 @@
     "networkSupport": null,
     "networkFilter": "Photon Mono",
     "buildVolumeMm": {
-      "width": 82.62,
-      "depth": 130.56,
+      "width": 130.56,
+      "depth": 82.62,
       "height": 165
     },
     "pixelSize": {
@@ -140,8 +140,8 @@
       "y": 51
     },
     "display": {
-      "resolutionX": 1620,
-      "resolutionY": 2560,
+      "resolutionX": 2560,
+      "resolutionY": 1620,
       "outputFormat": ".aff",
       "formatVersion": "pwmo",
       "settingsMode": "simple",
@@ -161,8 +161,8 @@
     "networkSupport": null,
     "networkFilter": "Photon Mono SE",
     "buildVolumeMm": {
-      "width": 82.62,
-      "depth": 130.56,
+      "width": 130.56,
+      "depth": 82.62,
       "height": 160
     },
     "pixelSize": {
@@ -170,8 +170,8 @@
       "y": 51
     },
     "display": {
-      "resolutionX": 1620,
-      "resolutionY": 2560,
+      "resolutionX": 2560,
+      "resolutionY": 1620,
       "outputFormat": ".aff",
       "formatVersion": "pwms",
       "settingsMode": "simple",
@@ -191,8 +191,8 @@
     "networkSupport": null,
     "networkFilter": "Photon Mono SQ",
     "buildVolumeMm": {
-      "width": 120,
-      "depth": 128,
+      "width": 128,
+      "depth": 120,
       "height": 200
     },
     "pixelSize": {
@@ -200,8 +200,8 @@
       "y": 50
     },
     "display": {
-      "resolutionX": 2400,
-      "resolutionY": 2560,
+      "resolutionX": 2560,
+      "resolutionY": 2400,
       "outputFormat": ".aff",
       "formatVersion": "pmsq",
       "settingsMode": "simple",

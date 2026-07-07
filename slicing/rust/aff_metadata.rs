@@ -31,7 +31,7 @@ pub(super) struct AffMachineProfile {
 const PROFILE_PWS: AffMachineProfile = AffMachineProfile {
     key_suffix: "pws", machine_name: "Photon S", max_version: 1,
     rle_format: AffRleFormat::Pws,
-    display_width_mm: 68.04, display_height_mm: 120.96, machine_z_mm: 165.0,
+    display_width_mm: 120.96, display_height_mm: 68.04, machine_z_mm: 165.0,
     default_pixel_um: 47.25, layer_image_format: "pwsImg",
     preview_size: [224, 168], preview2_size: [330, 190],
 };
@@ -39,7 +39,7 @@ const PROFILE_PWS: AffMachineProfile = AffMachineProfile {
 const PROFILE_PW0: AffMachineProfile = AffMachineProfile {
     key_suffix: "pw0", machine_name: "Photon Zero", max_version: 1,
     rle_format: AffRleFormat::Pw0,
-    display_width_mm: 55.44, display_height_mm: 98.637, machine_z_mm: 150.0,
+    display_width_mm: 98.637, display_height_mm: 55.44, machine_z_mm: 150.0,
     default_pixel_um: 47.25, layer_image_format: "pw0Img",
     preview_size: [224, 168], preview2_size: [330, 190],
 };
@@ -71,7 +71,7 @@ const PROFILE_DL2P: AffMachineProfile = AffMachineProfile {
 const PROFILE_PWMO: AffMachineProfile = AffMachineProfile {
     key_suffix: "pwmo", machine_name: "Photon Mono", max_version: 516,
     rle_format: AffRleFormat::Pw0,
-    display_width_mm: 82.62, display_height_mm: 130.56, machine_z_mm: 165.0,
+    display_width_mm: 130.56, display_height_mm: 82.62, machine_z_mm: 165.0,
     default_pixel_um: 47.25, layer_image_format: "pw0Img",
     preview_size: [224, 168], preview2_size: [330, 190],
 };
@@ -97,7 +97,7 @@ const PROFILE_PM4N: AffMachineProfile = AffMachineProfile {
 const PROFILE_PWMS: AffMachineProfile = AffMachineProfile {
     key_suffix: "pwms", machine_name: "Photon Mono SE", max_version: 516,
     rle_format: AffRleFormat::Pw0,
-    display_width_mm: 82.62, display_height_mm: 130.56, machine_z_mm: 160.0,
+    display_width_mm: 130.56, display_height_mm: 82.62, machine_z_mm: 160.0,
     default_pixel_um: 47.25, layer_image_format: "pw0Img",
     preview_size: [224, 168], preview2_size: [330, 190],
 };
@@ -145,7 +145,7 @@ const PROFILE_PX6S: AffMachineProfile = AffMachineProfile {
 const PROFILE_PMSQ: AffMachineProfile = AffMachineProfile {
     key_suffix: "pmsq", machine_name: "Photon Mono SQ", max_version: 516,
     rle_format: AffRleFormat::Pw0,
-    display_width_mm: 120.0, display_height_mm: 128.0, machine_z_mm: 200.0,
+    display_width_mm: 128.0, display_height_mm: 120.0, machine_z_mm: 200.0,
     default_pixel_um: 47.25, layer_image_format: "pw0Img",
     preview_size: [224, 168], preview2_size: [330, 190],
 };

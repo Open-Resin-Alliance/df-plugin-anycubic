@@ -101,8 +101,8 @@
     "networkSupport": null,
     "networkFilter": "Photon S",
     "buildVolumeMm": {
-      "width": 68.04,
-      "depth": 120.96,
+      "width": 120.96,
+      "depth": 68.04,
       "height": 165
     },
     "pixelSize": {
@@ -110,8 +110,8 @@
       "y": 47.25
     },
     "display": {
-      "resolutionX": 1440,
-      "resolutionY": 2560,
+      "resolutionX": 2560,
+      "resolutionY": 1440,
       "outputFormat": ".aff",
       "formatVersion": "pws",
       "settingsMode": "simple",
@@ -131,8 +131,8 @@
     "networkSupport": null,
     "networkFilter": "Photon Zero",
     "buildVolumeMm": {
-      "width": 55.44,
-      "depth": 98.637,
+      "width": 98.637,
+      "depth": 55.44,
       "height": 150
     },
     "pixelSize": {
@@ -140,8 +140,8 @@
       "y": 115.5
     },
     "display": {
-      "resolutionX": 480,
-      "resolutionY": 854,
+      "resolutionX": 854,
+      "resolutionY": 480,
       "outputFormat": ".aff",
       "formatVersion": "pw0",
       "settingsMode": "simple",
