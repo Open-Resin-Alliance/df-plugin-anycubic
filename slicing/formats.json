@@ -21,8 +21,7 @@
       ".pm3r",
       ".pm5",
       ".pm5s",
-      ".m5sp",
-      ".pwc"
+      ".m5sp"
     ],
     "displayName": "Anycubic File Format (AFF)",
     "version": "1.0",

@@ -38,6 +38,8 @@ pub(super) struct AfzMachineProfile {
     pub raster_segments_capacity: u32,
     /// Z-axis max acceleration for firmware time calculation.
     pub machine_max_acceleration_z: u32,
+    /// Maximum file format version accepted by this printer's firmware.
+    pub max_file_version: u32,
     /// Preview 1 dimensions [width, height].
     pub prev1_size: [u32; 2],
     /// Preview 2 dimensions [width, height].
@@ -57,6 +59,7 @@ const PROFILE_PM7M: AfzMachineProfile = AfzMachineProfile {
     rotate_z: 0.0,
     raster_segments_capacity: 0,
     machine_max_acceleration_z: 20,
+    max_file_version: 518,
     prev1_size: [224, 168],
     prev2_size: [336, 252],
     cloud_prev_size: [800, 600],
@@ -73,6 +76,7 @@ const PROFILE_PWSZ: AfzMachineProfile = AfzMachineProfile {
     rotate_z: 0.0,
     raster_segments_capacity: 100000,
     machine_max_acceleration_z: 20,
+    max_file_version: 518,
     prev1_size: [224, 168],
     prev2_size: [336, 252],
     cloud_prev_size: [800, 600],
@@ -89,6 +93,7 @@ const PROFILE_PM7: AfzMachineProfile = AfzMachineProfile {
     rotate_z: 0.0,
     raster_segments_capacity: 100000,
     machine_max_acceleration_z: 20,
+    max_file_version: 518,
     prev1_size: [168, 126],
     prev2_size: [168, 126],
     cloud_prev_size: [800, 600],
@@ -105,8 +110,43 @@ const PROFILE_PM4U: AfzMachineProfile = AfzMachineProfile {
     rotate_z: 180.0,
     raster_segments_capacity: 100000,
     machine_max_acceleration_z: 20,
+    max_file_version: 518,
     prev1_size: [168, 126],
     prev2_size: [168, 126],
+    cloud_prev_size: [800, 600],
+};
+
+const PROFILE_PP1: AfzMachineProfile = AfzMachineProfile {
+    machine_name: "Anycubic Photon P1",
+    picture: "Anycubic_Photon_P1.png",
+    pixel_pitch_x_um: 18.0,
+    pixel_pitch_y_um: 18.0,
+    print_x_mm: 223.0,
+    print_y_mm: 126.0,
+    print_z_mm: 230.0,
+    rotate_z: 0.0,
+    raster_segments_capacity: 100000,
+    machine_max_acceleration_z: 20,
+    max_file_version: 519,
+    prev1_size: [224, 168],
+    prev2_size: [336, 252],
+    cloud_prev_size: [800, 600],
+};
+
+const PROFILE_PP1M: AfzMachineProfile = AfzMachineProfile {
+    machine_name: "Anycubic Photon P1 Max",
+    picture: "Anycubic_Photon_P1Max.png",
+    pixel_pitch_x_um: 18.0,
+    pixel_pitch_y_um: 18.0,
+    print_x_mm: 297.5,
+    print_y_mm: 164.0,
+    print_z_mm: 300.0,
+    rotate_z: 0.0,
+    raster_segments_capacity: 100000,
+    machine_max_acceleration_z: 20,
+    max_file_version: 519,
+    prev1_size: [224, 168],
+    prev2_size: [336, 252],
     cloud_prev_size: [800, 600],
 };
 
@@ -118,6 +158,8 @@ pub(super) fn machine_profile_for_suffix(suffix: &str) -> &'static AfzMachinePro
         "pwsz" => &PROFILE_PWSZ,
         "pm7" => &PROFILE_PM7,
         "pm4u" => &PROFILE_PM4U,
+        "pp1" => &PROFILE_PP1,
+        "pp1m" => &PROFILE_PP1M,
         _ => &PROFILE_PM7M,
     }
 }
@@ -215,6 +257,10 @@ fn get_bool(v: &Value, key: &str) -> Option<bool> {
 //  Parsers
 // ═══════════════════════════════════════════════════════════════════
 
+fn sanitize_non_negative(v: f32) -> f32 {
+    if v.is_finite() && v >= 0.0 { v } else { 0.0 }
+}
+
 /// Extract the AFZ timing model from `job.metadata_json`.
 ///
 /// Looks under `metadata_json.material.*` for timing values (same as CTB),
@@ -231,19 +277,15 @@ pub(super) fn parse_afz_timing_model(job: &SliceJobV3) -> AfzTimingModel {
     let twostage = settings_mode.eq_ignore_ascii_case("twostage");
 
     let f = |section: Option<&Value>, key: &str| -> Option<f32> {
-        section.and_then(|s| get_f32(s, key))
+        section.and_then(|s| get_f32(s, key)).map(sanitize_non_negative)
     };
 
     let bottom_layer_count = material
         .and_then(|m| get_u32(m, "bottomLayerCount"))
         .unwrap_or(4);
 
-    let normal_exposure = material
-        .and_then(|m| get_f32(m, "normalExposureSec"))
-        .unwrap_or(2.0);
-    let bottom_exposure = material
-        .and_then(|m| get_f32(m, "bottomExposureSec"))
-        .unwrap_or(30.0);
+    let normal_exposure = f(material, "normalExposureSec").unwrap_or(2.0);
+    let bottom_exposure = f(material, "bottomExposureSec").unwrap_or(30.0);
 
     let wait_time = f(material, "waitTimeBeforeCureSec")
         .or_else(|| f(material, "lightOffDelaySec"))
@@ -251,10 +293,12 @@ pub(super) fn parse_afz_timing_model(job: &SliceJobV3) -> AfzTimingModel {
 
     // Speeds in metadata are mm/min; AFZ needs mm/s
     let speed = |section: Option<&Value>, key: &str, default_mm_min: f32| -> f32 {
-        section
-            .and_then(|s| get_f32(s, key))
-            .unwrap_or(default_mm_min)
-            * MM_MIN_TO_MM_SEC
+        sanitize_non_negative(
+            section
+                .and_then(|s| get_f32(s, key))
+                .unwrap_or(default_mm_min)
+                * MM_MIN_TO_MM_SEC,
+        )
     };
 
     let lift_height = f(material, "liftDistanceMm").unwrap_or(5.0);
@@ -285,7 +329,7 @@ pub(super) fn parse_afz_timing_model(job: &SliceJobV3) -> AfzTimingModel {
         normal_exposure_sec: normal_exposure,
         bottom_exposure_sec: bottom_exposure,
         bottom_layer_count,
-        layer_height_mm: job.layer_height_mm,
+        layer_height_mm: sanitize_non_negative(job.layer_height_mm),
         wait_time_before_cure_sec: wait_time,
         bottom_lift_height_mm: bottom_lift_height,
         bottom_lift_speed_mm_s: bottom_lift_speed,
@@ -319,12 +363,18 @@ pub(super) fn parse_afz_build_model(job: &SliceJobV3) -> AfzBuildModel {
     let twostage = settings_mode.eq_ignore_ascii_case("twostage");
 
     // Derive the machine key suffix from the most specific source available:
-    // 1. Explicit `anycubic.keySuffix` override in metadata (if set)
-    // 2. Printer output format extension from the selected printer profile
+    // 1. `job.format_version` (set by printer profile display.formatVersion) — preferred
+    // 2. `printer.formatVersion` in metadata (set by the raster manifest)
+    // 3. Explicit `anycubic.keySuffix` override in metadata (legacy fallback)
+    // 4. Printer output format extension from the selected printer profile
     //    (e.g. ".pwsz" → "pwsz", ".pm7m" → "pm7m")
-    // 3. Fall back to "pm7m" only when neither is present
-    let key_suffix = anycubic
-        .and_then(|a| get_str(a, "keySuffix"))
+    // 5. Fall back to "pm7m" only when none of the above are present
+    let key_suffix = job
+        .format_version
+        .as_deref()
+        .filter(|v| !v.is_empty())
+        .or_else(|| printer.and_then(|p| get_str(p, "formatVersion")))
+        .or_else(|| anycubic.and_then(|a| get_str(a, "keySuffix")))
         .or_else(|| {
             printer
                 .and_then(|p| get_str(p, "outputFormat"))
@@ -335,21 +385,13 @@ pub(super) fn parse_afz_build_model(job: &SliceJobV3) -> AfzBuildModel {
 
     let profile = machine_profile_for_suffix(&key_suffix);
 
-    eprintln!("[AFZ] key_suffix={key_suffix:?}, machine={:?}, pixel_size={:?}",
-        anycubic.and_then(|a| get_str(a, "machineName"))
-            .or_else(|| printer.and_then(|p| get_str(p, "machineName"))),
-        printer.and_then(|p| p.get("pixelSize")),
-    );
-
     // Read machine name from metadata, falling back through available keys:
     // 1. anycubic.machineName (explicit override)
     // 2. printer.machineName (canonical metadata key)
-    // 3. printer.name (currently emitted by the frontend manifest)
-    // 4. Profile constant derived from key_suffix
+    // 3. Profile constant derived from key_suffix (ensures firmware-compatible name)
     let machine_name = anycubic
         .and_then(|a| get_str(a, "machineName"))
         .or_else(|| printer.and_then(|p| get_str(p, "machineName")))
-        .or_else(|| printer.and_then(|p| get_str(p, "name")))
         .unwrap_or(profile.machine_name)
         .to_string();
 
@@ -430,5 +472,123 @@ pub(super) fn parse_afz_build_model(job: &SliceJobV3) -> AfzBuildModel {
         resin_setting_name,
         target_temperature,
         intelligent_release,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_job(metadata: &str) -> SliceJobV3 {
+        make_job_with_version(metadata, None)
+    }
+
+    fn make_job_with_version(metadata: &str, format_version: Option<&str>) -> SliceJobV3 {
+        SliceJobV3 {
+            output_format: ".azf".to_string(),
+            format_version: format_version.map(|v| v.to_string()),
+            source_width_px: 4,
+            source_height_px: 4,
+            width_px: 4,
+            height_px: 4,
+            build_width_mm: 10.0,
+            build_depth_mm: 20.0,
+            layer_height_mm: 0.05,
+            total_layers: 1,
+            export_thumbnail_png_base64: None,
+            png_compression_strategy: "balanced".to_string(),
+            container_compression_level: 2,
+            anti_aliasing_level: "Off".to_string(),
+            aa_on_supports: false,
+            minimum_aa_alpha_percent: 35.0,
+            mirror_x: false,
+            mirror_y: false,
+            triangles_xyz: vec![],
+            metadata_json: metadata.to_string(),
+            x_packing_mode: "none".to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn build_model_reads_format_version_primary() {
+        let job = make_job_with_version("{}", Some("pm4u"));
+        let build = parse_afz_build_model(&job);
+        assert_eq!(build.key_suffix, "pm4u");
+        assert_eq!(build.machine_name, "Anycubic Photon Mono 4 Ultra");
+    }
+
+    #[test]
+    fn build_model_format_version_takes_priority_over_keysuffix() {
+        let job = make_job_with_version(r#"{"anycubic":{"keySuffix":"pm7m"}}"#, Some("pm4u"));
+        let build = parse_afz_build_model(&job);
+        assert_eq!(build.key_suffix, "pm4u");
+        assert_eq!(build.machine_name, "Anycubic Photon Mono 4 Ultra");
+    }
+
+    #[test]
+    fn build_model_falls_back_to_printer_format_version() {
+        let job = make_job(r#"{"printer":{"formatVersion":"pwsz"}}"#);
+        let build = parse_afz_build_model(&job);
+        assert_eq!(build.key_suffix, "pwsz");
+        assert_eq!(build.machine_name, "Anycubic Photon Mono M7 Pro");
+    }
+
+    #[test]
+    fn build_model_falls_back_to_keysuffix() {
+        let job = make_job(r#"{"anycubic":{"keySuffix":"pm4u"}}"#);
+        let build = parse_afz_build_model(&job);
+        assert_eq!(build.key_suffix, "pm4u");
+    }
+
+    #[test]
+    fn build_model_falls_back_to_printer_output_format() {
+        let job = make_job(r#"{"printer":{"outputFormat":".pwsz"}}"#);
+        let build = parse_afz_build_model(&job);
+        assert_eq!(build.key_suffix, "pwsz");
+        assert_eq!(build.machine_name, "Anycubic Photon Mono M7 Pro");
+    }
+
+    #[test]
+    fn build_model_uses_default_when_nothing_set() {
+        let job = make_job("{}");
+        let build = parse_afz_build_model(&job);
+        assert_eq!(build.key_suffix, "pm7m");
+    }
+
+    #[test]
+    fn build_model_resolves_pp1_from_format_version() {
+        let job = make_job_with_version("{}", Some("pp1"));
+        let build = parse_afz_build_model(&job);
+        assert_eq!(build.key_suffix, "pp1");
+        assert_eq!(build.machine_name, "Anycubic Photon P1");
+    }
+
+    #[test]
+    fn pp1_profile_has_bumped_max_file_version() {
+        let profile = machine_profile_for_suffix("pp1");
+        assert_eq!(profile.max_file_version, 519);
+    }
+
+    #[test]
+    fn build_model_resolves_pp1m_from_format_version() {
+        let job = make_job_with_version("{}", Some("pp1m"));
+        let build = parse_afz_build_model(&job);
+        assert_eq!(build.key_suffix, "pp1m");
+        assert_eq!(build.machine_name, "Anycubic Photon P1 Max");
+    }
+
+    #[test]
+    fn pp1m_profile_has_bumped_max_file_version() {
+        let profile = machine_profile_for_suffix("pp1m");
+        assert_eq!(profile.max_file_version, 519);
+    }
+
+    #[test]
+    fn existing_profiles_keep_max_file_version_518() {
+        for suffix in ["pm7m", "pwsz", "pm7", "pm4u"] {
+            let profile = machine_profile_for_suffix(suffix);
+            assert_eq!(profile.max_file_version, 518, "{} should have max_file_version 518", suffix);
+        }
     }
 }

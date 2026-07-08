@@ -98,19 +98,13 @@ pub(super) fn build_afz_container(
     zip.start_file(SOFTWARE_INFO_FILE, options)?;
     zip.write_all(software_json.as_bytes())?;
 
-    // 4. Previews
-    if let Some(ref png) = preview_1 {
-        zip.start_file("preview_images/preview_0.png", options)?;
-        zip.write_all(png)?;
-    }
-    if let Some(ref png) = preview_2 {
-        zip.start_file("preview_images/preview_1.png", options)?;
-        zip.write_all(png)?;
-    }
-    if let Some(ref png) = preview_3 {
-        zip.start_file("preview_images/preview_2.png", options)?;
-        zip.write_all(png)?;
-    }
+    // 4. Previews (always written — gradient fallback when no thumbnail provided)
+    zip.start_file("preview_images/preview_0.png", options)?;
+    zip.write_all(&preview_1)?;
+    zip.start_file("preview_images/preview_1.png", options)?;
+    zip.write_all(&preview_2)?;
+    zip.start_file("preview_images/preview_2.png", options)?;
+    zip.write_all(&preview_3)?;
 
     // 5. Layers controller
     let layers_json = build_layers_controller_json(timing, layers);
@@ -162,7 +156,12 @@ fn jf(v: f32) -> String {
     }
 }
 
-fn build_settings_json(job: &SliceJobV3, timing: &AfzTimingModel, build: &AfzBuildModel, profile: &AfzMachineProfile) -> String {
+fn build_settings_json(
+    job: &SliceJobV3,
+    timing: &AfzTimingModel,
+    build: &AfzBuildModel,
+    profile: &AfzMachineProfile,
+) -> String {
     // Build the multi_state_paras for the resin profile.
     // Stage 0 = step 1, stage 1 = step 2 for all fields (height, up_speed, down_speed).
     let multi_state = format!(
@@ -206,7 +205,7 @@ fn build_settings_json(job: &SliceJobV3, timing: &AfzTimingModel, build: &AfzBui
     "print_xsize": {disp_w},
     "print_ysize": {disp_h},
     "print_zsize": {mach_z},
-    "max_file_version": 518,
+    "max_file_version": {max_file_version},
     "prev_back_color": [0.0078125, 0.28125, 0.390625],
     "prev_model_color": [0.8046875, 0.8046875, 0.8046875],
     "prev_supports_color": [0.07421875, 0.92578125, 0.9296875],
@@ -317,8 +316,10 @@ fn build_settings_json(job: &SliceJobV3, timing: &AfzTimingModel, build: &AfzBui
     }}
   }}
 }}"#,
-        machine_name = serde_json::to_string(&build.machine_name).unwrap_or_else(|_| "\"Unknown\"".to_string()),
-        key_suffix = serde_json::to_string(&build.key_suffix).unwrap_or_else(|_| "\"pwsz\"".to_string()),
+        machine_name = serde_json::to_string(&build.machine_name)
+            .unwrap_or_else(|_| "\"Unknown\"".to_string()),
+        key_suffix =
+            serde_json::to_string(&build.key_suffix).unwrap_or_else(|_| "\"pwsz\"".to_string()),
         res_x = job.source_width_px,
         res_y = job.source_height_px,
         pixel_w = jf(build.pixel_width_um),
@@ -332,6 +333,7 @@ fn build_settings_json(job: &SliceJobV3, timing: &AfzTimingModel, build: &AfzBui
         prev2_w = profile.prev2_size[0],
         prev2_h = profile.prev2_size[1],
         raster_seg_cap = profile.raster_segments_capacity,
+        max_file_version = profile.max_file_version,
         aa = timing.anti_alias_level,
         cprev_w = profile.cloud_prev_size[0],
         cprev_h = profile.cloud_prev_size[1],
@@ -339,14 +341,23 @@ fn build_settings_json(job: &SliceJobV3, timing: &AfzTimingModel, build: &AfzBui
         max_accel_z = profile.machine_max_acceleration_z,
         resin_qualified_name = serde_json::to_string(&format!(
             "{}@{}@{}@{}",
-            build.resin_brand_name, build.resin_resin_name, build.resin_film_name, build.resin_setting_name
-        )).unwrap_or_else(|_| "\"Generic@standard_resin@ACF@default\"".to_string()),
-        resin_brand = serde_json::to_string(&build.resin_brand_name).unwrap_or_else(|_| "\"Generic\"".to_string()),
-        resin_resin = serde_json::to_string(&build.resin_resin_name).unwrap_or_else(|_| "\"standard_resin\"".to_string()),
-        resin_film = serde_json::to_string(&build.resin_film_name).unwrap_or_else(|_| "\"ACF\"".to_string()),
-        resin_setting = serde_json::to_string(&build.resin_setting_name).unwrap_or_else(|_| "\"default\"".to_string()),
+            build.resin_brand_name,
+            build.resin_resin_name,
+            build.resin_film_name,
+            build.resin_setting_name
+        ))
+        .unwrap_or_else(|_| "\"Generic@standard_resin@ACF@default\"".to_string()),
+        resin_brand = serde_json::to_string(&build.resin_brand_name)
+            .unwrap_or_else(|_| "\"Generic\"".to_string()),
+        resin_resin = serde_json::to_string(&build.resin_resin_name)
+            .unwrap_or_else(|_| "\"standard_resin\"".to_string()),
+        resin_film =
+            serde_json::to_string(&build.resin_film_name).unwrap_or_else(|_| "\"ACF\"".to_string()),
+        resin_setting = serde_json::to_string(&build.resin_setting_name)
+            .unwrap_or_else(|_| "\"default\"".to_string()),
         resin_price = jf(build.resin_price),
-        resin_type = serde_json::to_string(&build.resin_type).unwrap_or_else(|_| "\"Standard resin\"".to_string()),
+        resin_type = serde_json::to_string(&build.resin_type)
+            .unwrap_or_else(|_| "\"Standard resin\"".to_string()),
         resin_volume = jf(build.resin_volume_ml),
         resin_density = jf(build.resin_density),
         target_temperature = jf(build.target_temperature),
@@ -381,8 +392,8 @@ fn build_layers_controller_json(timing: &AfzTimingModel, layers: &[AfzPreparedLa
             timing.bottom_exposure_sec
         } else if layer_idx < transition_end && timing.transition_layer_count > 0 {
             // Transition layer — linear interpolation from bottom to normal exposure
-            let progress = (layer_idx - transition_start) as f32
-                / timing.transition_layer_count as f32;
+            let progress =
+                (layer_idx - transition_start) as f32 / timing.transition_layer_count as f32;
             timing.bottom_exposure_sec
                 + (timing.normal_exposure_sec - timing.bottom_exposure_sec) * progress
         } else {
@@ -478,8 +489,8 @@ fn build_print_info_json(
         let exposure = if layer_idx < transition_start {
             timing.bottom_exposure_sec
         } else if layer_idx < transition_end && timing.transition_layer_count > 0 {
-            let progress = (layer_idx - transition_start) as f32
-                / timing.transition_layer_count as f32;
+            let progress =
+                (layer_idx - transition_start) as f32 / timing.transition_layer_count as f32;
             timing.bottom_exposure_sec
                 + (timing.normal_exposure_sec - timing.bottom_exposure_sec) * progress
         } else {
@@ -492,20 +503,35 @@ fn build_print_info_json(
 
         // Lift motion: stage 1 + stage 2 (time = distance / speed)
         let (lift_h1, lift_s1, lift_h2, lift_s2) = if is_bottom {
-            (timing.bottom_lift_height_mm, timing.bottom_lift_speed_mm_s,
-             timing.bottom_lift_height2_mm, timing.bottom_lift_speed2_mm_s)
+            (
+                timing.bottom_lift_height_mm,
+                timing.bottom_lift_speed_mm_s,
+                timing.bottom_lift_height2_mm,
+                timing.bottom_lift_speed2_mm_s,
+            )
         } else {
-            (timing.lift_height_mm, timing.lift_speed_mm_s,
-             timing.lift_height2_mm, timing.lift_speed2_mm_s)
+            (
+                timing.lift_height_mm,
+                timing.lift_speed_mm_s,
+                timing.lift_height2_mm,
+                timing.lift_speed2_mm_s,
+            )
         };
 
-        if lift_s1 > 0.0 { print_time_sec += lift_h1 / lift_s1; }
-        if lift_s2 > 0.0 { print_time_sec += lift_h2 / lift_s2; }
+        if lift_s1 > 0.0 {
+            print_time_sec += lift_h1 / lift_s1;
+        }
+        if lift_s2 > 0.0 {
+            print_time_sec += lift_h2 / lift_s2;
+        }
 
         // Retract motion: total retract distance = total lift distance
         let total_lift = lift_h1 + lift_h2;
         let (ret_s1, ret_s2) = if is_bottom {
-            (timing.bottom_retract_speed_mm_s, timing.bottom_retract_speed2_mm_s)
+            (
+                timing.bottom_retract_speed_mm_s,
+                timing.bottom_retract_speed2_mm_s,
+            )
         } else {
             (timing.retract_speed_mm_s, timing.retract_speed2_mm_s)
         };
@@ -516,7 +542,9 @@ fn build_print_info_json(
             let ret_h1 = lift_h1;
             let ret_h2 = total_lift - ret_h1;
             print_time_sec += ret_h1 / ret_s1;
-            if ret_h2 > 0.0 { print_time_sec += ret_h2 / ret_s2; }
+            if ret_h2 > 0.0 {
+                print_time_sec += ret_h2 / ret_s2;
+            }
         } else if ret_s1 > 0.0 {
             print_time_sec += total_lift / ret_s1;
         }
@@ -706,6 +734,7 @@ mod tests {
             anti_aliasing_level: "Off".to_string(),
             triangles_xyz: vec![],
             metadata_json: "{}".to_string(),
+            x_packing_mode: "none".to_string(),
             ..Default::default()
         }
     }
@@ -762,8 +791,7 @@ mod tests {
 
         // Verify it's a valid ZIP
         let cursor = Cursor::new(&bytes);
-        let mut archive =
-            zip::ZipArchive::new(cursor).expect("should be valid ZIP");
+        let mut archive = zip::ZipArchive::new(cursor).expect("should be valid ZIP");
 
         let expected_files = [
             SETTINGS_FILE,
