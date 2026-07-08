@@ -49,6 +49,7 @@ pub(super) fn write_named_table_header(
 }
 
 /// Overwrite a u32 at a known absolute offset in the buffer.
+#[allow(dead_code)]
 pub(super) fn patch_u32_le(out: &mut Cursor<Vec<u8>>, abs_offset: u64, v: u32) -> std::io::Result<()> {
     let saved = out.position();
     out.seek(SeekFrom::Start(abs_offset))?;
@@ -467,6 +468,7 @@ pub(super) fn write_model_body(
 
 // ── LayerImageColorTable (v515+) ────────────────────────────────────
 
+#[allow(dead_code)]
 pub(super) const COLOR_TABLE_LENGTH: u32 = 4 + 4 + 16 + 4; // UseFullGrey(u32) + GreyMaxCount(u32) + Grey[16] + Unknown(u32)
 
 pub(super) fn write_color_table_body(out: &mut Cursor<Vec<u8>>, aa_level: u32) -> std::io::Result<()> {

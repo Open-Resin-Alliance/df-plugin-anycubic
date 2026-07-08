@@ -11,9 +11,11 @@ use serde_json::Value;
 
 #[derive(Debug, Clone)]
 pub(super) struct AffMachineProfile {
+    #[allow(dead_code)]
     pub key_suffix: &'static str,
     pub machine_name: &'static str,
     pub max_version: u16,
+    #[allow(dead_code)]
     pub rle_format: AffRleFormat,
     pub display_width_mm: f32,
     pub display_height_mm: f32,
@@ -221,7 +223,7 @@ pub(super) fn machine_profile_for_suffix(suffix: &str) -> &'static AffMachinePro
         "pm5"  => &PROFILE_PM5,
         "pm5s" => &PROFILE_PM5S,
         "m5sp" => &PROFILE_M5SP,
-        other  => {
+        _other  => {
             // Unknown key suffix — default to Photon Mono profile.
             &PROFILE_PWMO
         }
