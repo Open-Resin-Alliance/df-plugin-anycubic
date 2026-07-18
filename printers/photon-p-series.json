@@ -55,7 +55,7 @@
       "outputFormat": ".azf",
       "formatVersion": "pp1",
       "settingsMode": "simple",
-      "mirrorX": false,
+      "mirrorX": true,
       "mirrorY": false
     }
   }

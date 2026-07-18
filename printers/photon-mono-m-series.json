@@ -25,7 +25,7 @@
       "outputFormat": ".azf",
       "formatVersion": "pm7m",
       "settingsMode": "simple",
-      "mirrorX": false,
+      "mirrorX": true,
       "mirrorY": false
     }
   },
