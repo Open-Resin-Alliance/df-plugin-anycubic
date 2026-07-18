@@ -1,7 +1,7 @@
 [
   {
     "presetId": "anycubic-photon-m3-max-pm3m",
-    "profileVersion": 1,
+    "profileVersion": 2,
     "manufacturer": "Anycubic",
     "family": "Photon M",
     "name": "Photon M3 Max",
@@ -19,6 +19,10 @@
       "x": 46,
       "y": 46
     },
+    "bitDepth": {
+      "bits": 4,
+      "description": "4-bit color depth, 16 grayscale levels for anti-aliasing"
+    },
     "display": {
       "resolutionX": 6480,
       "resolutionY": 3600,
@@ -31,7 +35,7 @@
   },
   {
     "presetId": "anycubic-photon-m3-premium-pm3r",
-    "profileVersion": 1,
+    "profileVersion": 2,
     "manufacturer": "Anycubic",
     "family": "Photon M",
     "name": "Photon M3 Premium",
@@ -49,6 +53,10 @@
       "x": 38,
       "y": 38
     },
+    "bitDepth": {
+      "bits": 4,
+      "description": "4-bit color depth, 16 grayscale levels for anti-aliasing"
+    },
     "display": {
       "resolutionX": 5760,
       "resolutionY": 3240,
@@ -61,7 +69,7 @@
   },
   {
     "presetId": "anycubic-photon-m3-pm3",
-    "profileVersion": 1,
+    "profileVersion": 2,
     "manufacturer": "Anycubic",
     "family": "Photon M",
     "name": "Photon M3",
@@ -78,6 +86,10 @@
     "pixelSize": {
       "x": 40,
       "y": 40
+    },
+    "bitDepth": {
+      "bits": 4,
+      "description": "4-bit color depth, 16 grayscale levels for anti-aliasing"
     },
     "display": {
       "resolutionX": 4096,
