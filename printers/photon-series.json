@@ -1,7 +1,7 @@
 [
   {
     "presetId": "anycubic-photon-d2-dl2p",
-    "profileVersion": 1,
+    "profileVersion": 2,
     "manufacturer": "Anycubic",
     "family": "Photon",
     "name": "Photon D2",
@@ -19,6 +19,10 @@
       "x": 51,
       "y": 51
     },
+    "bitDepth": {
+      "bits": 4,
+      "description": "4-bit color depth, 16 grayscale levels for anti-aliasing"
+    },
     "display": {
       "resolutionX": 2560,
       "resolutionY": 1440,
@@ -31,7 +35,7 @@
   },
   {
     "presetId": "anycubic-photon-ultra-dlp",
-    "profileVersion": 1,
+    "profileVersion": 2,
     "manufacturer": "Anycubic",
     "family": "Photon",
     "name": "Photon Ultra",
@@ -49,6 +53,10 @@
       "x": 80,
       "y": 80
     },
+    "bitDepth": {
+      "bits": 4,
+      "description": "4-bit color depth, 16 grayscale levels for anti-aliasing"
+    },
     "display": {
       "resolutionX": 1280,
       "resolutionY": 720,
@@ -61,7 +69,7 @@
   },
   {
     "presetId": "anycubic-photon-x-pwx",
-    "profileVersion": 1,
+    "profileVersion": 2,
     "manufacturer": "Anycubic",
     "family": "Photon",
     "name": "Photon X",
@@ -79,6 +87,10 @@
       "x": 75,
       "y": 75
     },
+    "bitDepth": {
+      "bits": 4,
+      "description": "4-bit color depth, 16 grayscale levels for anti-aliasing"
+    },
     "display": {
       "resolutionX": 2560,
       "resolutionY": 1600,
@@ -91,7 +103,7 @@
   },
   {
     "presetId": "anycubic-photon-s-pws",
-    "profileVersion": 1,
+    "profileVersion": 2,
     "manufacturer": "Anycubic",
     "family": "Photon",
     "name": "Photon S",
@@ -109,6 +121,10 @@
       "x": 47.25,
       "y": 47.25
     },
+    "bitDepth": {
+      "bits": 4,
+      "description": "4-bit color depth, 16 grayscale levels for anti-aliasing"
+    },
     "display": {
       "resolutionX": 2560,
       "resolutionY": 1440,
@@ -121,7 +137,7 @@
   },
   {
     "presetId": "anycubic-photon-zero-pw0",
-    "profileVersion": 1,
+    "profileVersion": 2,
     "manufacturer": "Anycubic",
     "family": "Photon",
     "name": "Photon Zero",
@@ -138,6 +154,10 @@
     "pixelSize": {
       "x": 115.5,
       "y": 115.5
+    },
+    "bitDepth": {
+      "bits": 4,
+      "description": "4-bit color depth, 16 grayscale levels for anti-aliasing"
     },
     "display": {
       "resolutionX": 854,

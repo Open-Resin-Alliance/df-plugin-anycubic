@@ -91,7 +91,7 @@
   },
   {
     "presetId": "anycubic-photon-mono-m5s-pro-m5sp",
-    "profileVersion": 1,
+    "profileVersion": 2,
     "manufacturer": "Anycubic",
     "family": "Photon Mono M",
     "name": "Photon Mono M5s Pro",
@@ -109,6 +109,10 @@
       "x": 16.8,
       "y": 16.8
     },
+    "bitDepth": {
+      "bits": 4,
+      "description": "4-bit color depth, 16 grayscale levels for anti-aliasing"
+    },
     "display": {
       "resolutionX": 13312,
       "resolutionY": 5120,
@@ -121,7 +125,7 @@
   },
   {
     "presetId": "anycubic-photon-mono-m5s-pm5s",
-    "profileVersion": 1,
+    "profileVersion": 2,
     "manufacturer": "Anycubic",
     "family": "Photon Mono M",
     "name": "Photon Mono M5s",
@@ -139,6 +143,10 @@
       "x": 19,
       "y": 19
     },
+    "bitDepth": {
+      "bits": 4,
+      "description": "4-bit color depth, 16 grayscale levels for anti-aliasing"
+    },
     "display": {
       "resolutionX": 11520,
       "resolutionY": 5120,
@@ -151,7 +159,7 @@
   },
   {
     "presetId": "anycubic-photon-mono-m5-pm5",
-    "profileVersion": 1,
+    "profileVersion": 2,
     "manufacturer": "Anycubic",
     "family": "Photon Mono M",
     "name": "Photon Mono M5",
@@ -168,6 +176,10 @@
     "pixelSize": {
       "x": 19,
       "y": 19
+    },
+    "bitDepth": {
+      "bits": 4,
+      "description": "4-bit color depth, 16 grayscale levels for anti-aliasing"
     },
     "display": {
       "resolutionX": 11520,

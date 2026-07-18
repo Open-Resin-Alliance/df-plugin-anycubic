@@ -1,7 +1,7 @@
 [
   {
     "presetId": "anycubic-photon-mono-x-6ks-px6s",
-    "profileVersion": 1,
+    "profileVersion": 2,
     "manufacturer": "Anycubic",
     "family": "Photon Mono X",
     "name": "Photon Mono X 6Ks",
@@ -19,6 +19,10 @@
       "x": 34,
       "y": 34
     },
+    "bitDepth": {
+      "bits": 4,
+      "description": "4-bit color depth, 16 grayscale levels for anti-aliasing"
+    },
     "display": {
       "resolutionX": 5760,
       "resolutionY": 3600,
@@ -31,7 +35,7 @@
   },
   {
     "presetId": "anycubic-photon-mono-x-6k-m3-plus-pwmb",
-    "profileVersion": 1,
+    "profileVersion": 2,
     "manufacturer": "Anycubic",
     "family": "Photon Mono X",
     "name": "Photon Mono X 6K / M3 Plus",
@@ -49,6 +53,10 @@
       "x": 34.4,
       "y": 34.4
     },
+    "bitDepth": {
+      "bits": 4,
+      "description": "4-bit color depth, 16 grayscale levels for anti-aliasing"
+    },
     "display": {
       "resolutionX": 5760,
       "resolutionY": 3600,
@@ -61,7 +69,7 @@
   },
   {
     "presetId": "anycubic-photon-mono-x2-pmx2",
-    "profileVersion": 1,
+    "profileVersion": 2,
     "manufacturer": "Anycubic",
     "family": "Photon Mono X",
     "name": "Photon Mono X2",
@@ -79,6 +87,10 @@
       "x": 48,
       "y": 48
     },
+    "bitDepth": {
+      "bits": 4,
+      "description": "4-bit color depth, 16 grayscale levels for anti-aliasing"
+    },
     "display": {
       "resolutionX": 4096,
       "resolutionY": 2560,
@@ -91,7 +103,7 @@
   },
   {
     "presetId": "anycubic-photon-mono-x-pwmx",
-    "profileVersion": 1,
+    "profileVersion": 2,
     "manufacturer": "Anycubic",
     "family": "Photon Mono X",
     "name": "Photon Mono X",
@@ -108,6 +120,10 @@
     "pixelSize": {
       "x": 50,
       "y": 50
+    },
+    "bitDepth": {
+      "bits": 4,
+      "description": "4-bit color depth, 16 grayscale levels for anti-aliasing"
     },
     "display": {
       "resolutionX": 3840,
