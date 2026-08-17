@@ -167,12 +167,12 @@
   },
   {
     "presetId": "anycubic-photon-mono-se-pwms",
-    "profileVersion": 2,
+    "profileVersion": 3,
     "manufacturer": "Anycubic",
     "family": "Photon Mono",
     "name": "Photon Mono SE",
     "imageAssetPath": "./assets/photon-mono/photon-mono-se.png",
-    "antiAliasing": true,
+    "antiAliasing": false,
     "hasCamera": false,
     "networkSupport": null,
     "networkFilter": "Photon Mono SE",
@@ -184,10 +184,6 @@
     "pixelSize": {
       "x": 51,
       "y": 51
-    },
-    "bitDepth": {
-      "bits": 4,
-      "description": "4-bit color depth, 16 grayscale levels for anti-aliasing"
     },
     "display": {
       "resolutionX": 2560,
