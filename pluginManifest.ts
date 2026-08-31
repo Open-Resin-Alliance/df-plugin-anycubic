@@ -14,7 +14,7 @@ function resolvePresetImagePath(imageAssetPath: unknown): string | undefined {
   return `/plugins/anycubic/printers/${normalized}`;
 }
 
-function mapPresets(presets: any[]) {
+function mapPresets(presets: Record<string, unknown>[]) {
   return presets.map((preset) => ({
     ...preset,
     imageAssetPath: resolvePresetImagePath(preset.imageAssetPath),
@@ -28,12 +28,12 @@ export const ANYCUBIC_PLUGIN_MANIFEST = {
   version: '0.1.0',
   description: 'Anycubic printer profile pack (AFF and AZF format support).',
   printerPresets: [
-    ...mapPresets(photonPPrinters as any[]),
-    ...mapPresets(photonMonoMPrinters as any[]),
-    ...mapPresets(photonMonoPrinters as any[]),
-    ...mapPresets(photonMonoXPrinters as any[]),
-    ...mapPresets(photonMPrinters as any[]),
-    ...mapPresets(photonPrinters as any[])
+    ...mapPresets(photonPPrinters as Record<string, unknown>[]),
+    ...mapPresets(photonMonoMPrinters as Record<string, unknown>[]),
+    ...mapPresets(photonMonoPrinters as Record<string, unknown>[]),
+    ...mapPresets(photonMonoXPrinters as Record<string, unknown>[]),
+    ...mapPresets(photonMPrinters as Record<string, unknown>[]),
+    ...mapPresets(photonPrinters as Record<string, unknown>[])
   ] as PrinterPreset[],
   materialTemplates: [],
 };

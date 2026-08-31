@@ -448,7 +448,10 @@ function azfModeMap() {
   return { simple: ANYCUBIC_AZF_SIMPLE, twostage: ANYCUBIC_AZF_TWOSTAGE };
 }
 
-function azfModeMapNoTemp() {
+// Not wired into slicingFormatsByOutput yet: the AZF variants without a target
+// temperature are ready for printers that do not expose one, but no extension
+// maps to them today. Exported so it does not read as dead code.
+export function azfModeMapNoTemp() {
   return { simple: ANYCUBIC_AZF_SIMPLE_NO_TEMP, twostage: ANYCUBIC_AZF_TWOSTAGE_NO_TEMP };
 }
 
