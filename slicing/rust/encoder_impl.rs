@@ -47,8 +47,8 @@ impl FormatEncoder for AffPluginEncoder {
     }
 
     fn requires_raw_mask_layers(&self) -> bool {
-        // Both streaming paths can produce the data they need; the engine
-        // calls create_rle_stream_encoder first.
+        // Only the non-streaming fallback reads raw masks; both PW0 and PWS
+        // stream RLE.
         true
     }
 
@@ -65,75 +65,17 @@ impl FormatEncoder for AffPluginEncoder {
         job: &SliceJobV3,
     ) -> Result<Option<Box<dyn RleStreamEncoder>>, SlicerV3Error> {
         let build = parse_aff_build_model(job);
-        if aff_rle_format_for_suffix(&build.key_suffix) != AffRleFormat::Pw0 {
-            return Ok(None); // .pws goes through raw-mask path
-        }
+        // PWS packs one bit plane per AA level, so its layers are encoded from
+        // the expanded mask; PW0 encodes straight from the runs.
+        let pws_aa_level = (aff_rle_format_for_suffix(&build.key_suffix) == AffRleFormat::Pws)
+            .then(|| parse_aff_timing_model(job).anti_alias_level as u8);
         let total_pixels =
             (job.source_width_px as usize).saturating_mul(job.source_height_px as usize);
         Ok(Some(Box::new(AffRleStreamEncoder {
             job: job.clone(),
             total_pixels,
+            pws_aa_level,
             prepared: Vec::with_capacity(job.total_layers as usize),
-        })))
-    }
-
-    fn create_raw_mask_stream_encoder(
-        &self,
-        job: &SliceJobV3,
-    ) -> Result<Option<Box<dyn RawMaskStreamEncoder>>, SlicerV3Error> {
-        let build = parse_aff_build_model(job);
-        if aff_rle_format_for_suffix(&build.key_suffix) != AffRleFormat::Pws {
-            return Ok(None); // PW0 extensions go through RLE path
-        }
-
-        let timing = parse_aff_timing_model(job);
-        let aa_level = timing.anti_alias_level as u8;
-        let expected_pixels =
-            (job.source_width_px as usize).saturating_mul(job.source_height_px as usize);
-
-        let worker_count =
-            cap_afz_workers_for_mask_bytes(choose_afz_encode_threads(), expected_pixels);
-        let queue_depth = choose_afz_queue_depth(worker_count, expected_pixels);
-        let (work_tx, work_rx) = bounded::<(u32, Vec<u8>)>(queue_depth);
-        let (result_tx, result_rx) = mpsc::channel::<Result<AffPreparedLayer, SlicerV3Error>>();
-        let mut workers = Vec::with_capacity(worker_count);
-
-        for _ in 0..worker_count {
-            let work_rx = work_rx.clone();
-            let result_tx = result_tx.clone();
-            let pixels = expected_pixels;
-            let handle = thread::spawn(move || loop {
-                let Ok((layer_index, raw_mask)) = work_rx.recv() else { break; };
-
-                if raw_mask.is_empty() {
-                    let prep = encode_single_aff_pws_empty_layer(layer_index as usize, pixels, aa_level);
-                    crate::pipeline::return_mask_to_pool(raw_mask);
-                    if result_tx.send(Ok(prep)).is_err() { break; }
-                    continue;
-                }
-                if raw_mask.len() != pixels {
-                    let len = raw_mask.len();
-                    crate::pipeline::return_mask_to_pool(raw_mask);
-                    let _ = result_tx.send(Err(SlicerV3Error::MissingRenderedLayerPayload(
-                        format!("AFF layer {layer_index} size mismatch: expected {pixels}, got {len}"),
-                    )));
-                    continue;
-                }
-                let prep = encode_single_aff_pws_layer(layer_index as usize, &raw_mask, aa_level);
-                crate::pipeline::return_mask_to_pool(raw_mask);
-                if result_tx.send(Ok(prep)).is_err() { break; }
-            });
-            workers.push(handle);
-        }
-        drop(work_rx);
-        drop(result_tx);
-
-        Ok(Some(Box::new(AffRawMaskStreamEncoder {
-            job: job.clone(),
-            work_tx: Some(work_tx),
-            result_rx,
-            workers,
-            consumed_layers: 0,
         })))
     }
 
@@ -753,6 +695,8 @@ use aff_metadata::{
 struct AffRleStreamEncoder {
     job: SliceJobV3,
     total_pixels: usize,
+    /// `Some(aa_level)` for PWS, `None` for PW0.
+    pws_aa_level: Option<u8>,
     prepared: Vec<AffPreparedLayer>,
 }
 
@@ -762,16 +706,28 @@ impl RleStreamEncoder for AffRleStreamEncoder {
         layer_index: u32,
         runs: Vec<crate::rle::RleRun>,
     ) -> Result<(), SlicerV3Error> {
-        let encoded = encode_pw0_from_rle(&runs, self.total_pixels);
-        self.prepared.push(AffPreparedLayer {
-            index: layer_index as usize,
-            encoded,
-            non_zero_pixel_count: 0, // backfilled via set_area_stats
-        });
+        let prepared = match self.pws_aa_level {
+            Some(aa_level) => encode_single_aff_pws_layer(
+                layer_index as usize,
+                &crate::rle::expand_rle_to_mask(&runs, self.total_pixels),
+                aa_level,
+            ),
+            None => AffPreparedLayer {
+                index: layer_index as usize,
+                encoded: encode_pw0_from_rle(&runs, self.total_pixels),
+                non_zero_pixel_count: 0, // backfilled via set_area_stats
+            },
+        };
+        self.prepared.push(prepared);
         Ok(())
     }
 
     fn set_area_stats(&mut self, stats: Vec<LayerAreaStatsV3>) {
+        // PWS counts every lit pixel from the mask itself, as the raw-mask
+        // path always did; only PW0 takes the rasterizer's solid count.
+        if self.pws_aa_level.is_some() {
+            return;
+        }
         for layer in &mut self.prepared {
             if let Some(s) = stats.get(layer.index) {
                 layer.non_zero_pixel_count = s.total_solid_pixels;
@@ -782,6 +738,11 @@ impl RleStreamEncoder for AffRleStreamEncoder {
     fn parallel_encode_fn(
         &self,
     ) -> Option<Arc<dyn Fn(u32, &[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync>> {
+        // PWS needs each layer's lit-pixel count, which only consume_rle_layer
+        // computes; it is a 2560×1440 panel, so the serial path is cheap.
+        if self.pws_aa_level.is_some() {
+            return None;
+        }
         let total_pixels = self.total_pixels;
         Some(Arc::new(move |_idx, runs| Ok(encode_pw0_from_rle(runs, total_pixels))))
     }
@@ -810,93 +771,10 @@ impl RleStreamEncoder for AffRleStreamEncoder {
     }
 }
 
-struct AffRawMaskStreamEncoder {
-    job: SliceJobV3,
-    work_tx: Option<crossbeam_channel::Sender<(u32, Vec<u8>)>>,
-    result_rx: mpsc::Receiver<Result<AffPreparedLayer, SlicerV3Error>>,
-    workers: Vec<thread::JoinHandle<()>>,
-    consumed_layers: u32,
-}
-
-impl RawMaskStreamEncoder for AffRawMaskStreamEncoder {
-    fn consume_raw_mask_layer(
-        &mut self,
-        layer_index: u32,
-        raw_mask: Vec<u8>,
-    ) -> Result<(), SlicerV3Error> {
-        let Some(ref tx) = self.work_tx else {
-            return Err(SlicerV3Error::MissingRenderedLayerPayload(
-                "AFF streaming encoder no longer accepts layers after finalize".to_string(),
-            ));
-        };
-        tx.send((layer_index, raw_mask)).map_err(|_| {
-            SlicerV3Error::MissingRenderedLayerPayload(
-                "AFF streaming worker channel closed unexpectedly".to_string(),
-            )
-        })?;
-        self.consumed_layers = self.consumed_layers.saturating_add(1);
-        Ok(())
-    }
-
-    fn finalize_to_bytes(mut self: Box<Self>) -> Result<Vec<u8>, SlicerV3Error> {
-        if self.consumed_layers == 0 {
-            return Err(SlicerV3Error::MissingRenderedLayerPayload(
-                "no rendered layers were provided for AFF encoding".to_string(),
-            ));
-        }
-        let _ = self.work_tx.take();
-        while let Some(handle) = self.workers.pop() {
-            if handle.join().is_err() {
-                return Err(SlicerV3Error::UnsupportedOutput(
-                    "AFF streaming worker panicked".to_string(),
-                ));
-            }
-        }
-
-        let expected = self.consumed_layers as usize;
-        let mut ordered: Vec<Option<AffPreparedLayer>> = Vec::with_capacity(expected);
-        ordered.resize_with(expected, || None);
-        for _ in 0..expected {
-            let prepared = self.result_rx.recv().map_err(|_| {
-                SlicerV3Error::MissingRenderedLayerPayload(
-                    "AFF streaming worker results ended unexpectedly".to_string(),
-                )
-            })??;
-            let idx = prepared.index;
-            if idx >= expected {
-                return Err(SlicerV3Error::MissingRenderedLayerPayload(
-                    format!("AFF worker emitted out-of-range layer index {}", idx),
-                ));
-            }
-            ordered[idx] = Some(prepared);
-        }
-
-        let mut prepared = Vec::with_capacity(expected);
-        for (i, slot) in ordered.into_iter().enumerate() {
-            let Some(layer) = slot else {
-                return Err(SlicerV3Error::MissingRenderedLayerPayload(
-                    format!("AFF layer {} missing from streaming worker output", i),
-                ));
-            };
-            prepared.push(layer);
-        }
-
-        let timing = parse_aff_timing_model(&self.job);
-        let build = parse_aff_build_model(&self.job);
-        let profile = aff_machine_profile_for_suffix(&build.key_suffix);
-        build_aff_container(&self.job, &timing, &build, profile, &prepared)
-    }
-}
-
 fn encode_single_aff_pws_layer(index: usize, raw_mask: &[u8], aa_level: u8) -> AffPreparedLayer {
     let non_zero = raw_mask.iter().filter(|&&b| b > 0).count() as u32;
     let encoded = encode_pws(raw_mask, aa_level);
     AffPreparedLayer { index, encoded, non_zero_pixel_count: non_zero }
-}
-
-fn encode_single_aff_pws_empty_layer(index: usize, pixel_count: usize, aa_level: u8) -> AffPreparedLayer {
-    let encoded = encode_pws(&vec![0u8; pixel_count], aa_level);
-    AffPreparedLayer { index, encoded, non_zero_pixel_count: 0 }
 }
 
 /// Reads a single layer preview PNG from an AFZ (Anycubic Zip Format) file.
@@ -1063,11 +941,54 @@ mod tests {
     }
 
     #[test]
-    fn aff_rle_encoder_declines_pws_suffix() {
+    fn aff_rle_encoder_accepts_pw0_and_pws() {
+        // Default suffix "pwmo" → PW0.
         let job = make_job(".aff", 1);
-        // Default suffix "pwmo" → PW0 → RLE encoder accepted
-        let rle = AffPluginEncoder.create_rle_stream_encoder(&job).unwrap();
-        assert!(rle.is_some());
+        assert!(AffPluginEncoder.create_rle_stream_encoder(&job).unwrap().is_some());
+
+        let mut pws = make_job(".aff", 1);
+        pws.format_version = Some("pws".to_string());
+        assert!(AffPluginEncoder.create_rle_stream_encoder(&pws).unwrap().is_some());
+    }
+
+    /// Runs of a mask, as the rasterizer streams them.
+    fn mask_to_runs(mask: &[u8]) -> Vec<crate::rle::RleRun> {
+        let mut runs: Vec<crate::rle::RleRun> = Vec::new();
+        for &value in mask {
+            match runs.last_mut() {
+                Some(run) if run.value == value => run.length += 1,
+                _ => runs.push(crate::rle::RleRun { length: 1, value }),
+            }
+        }
+        runs
+    }
+
+    #[test]
+    fn pws_rle_stream_matches_the_raw_mask_encoding() {
+        let mut job = make_job(".aff", 3);
+        job.format_version = Some("pws".to_string());
+        let pixels = 16 * 16;
+        // Gray edges, an empty layer and a solid one: every case the AA planes see.
+        let masks: Vec<Vec<u8>> = vec![
+            (0..pixels).map(|i| ((i * 37) % 256) as u8).collect(),
+            vec![0u8; pixels],
+            vec![255u8; pixels],
+        ];
+
+        let mut stream = AffPluginEncoder.create_rle_stream_encoder(&job).unwrap().unwrap();
+        for (index, mask) in masks.iter().enumerate() {
+            stream.consume_rle_layer(index as u32, mask_to_runs(mask)).unwrap();
+        }
+        // The rasterizer's solid counts must not replace PWS's lit-pixel counts.
+        stream.set_area_stats(vec![LayerAreaStatsV3::default(); masks.len()]);
+        let streamed = stream.finalize_to_bytes().unwrap();
+
+        let rendered = RenderedLayersV3 { raw_mask_layers: Some(masks), ..Default::default() };
+        let from_masks = AffPluginEncoder
+            .encode_container_from_rendered_layers(&job, &rendered, &[])
+            .unwrap();
+
+        assert_eq!(streamed, from_masks);
     }
 
     #[test]
