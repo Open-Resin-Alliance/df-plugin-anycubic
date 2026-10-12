@@ -1,7 +1,7 @@
 [
   {
     "presetId": "anycubic-photon-mono-4-ultra-pm4u",
-    "profileVersion": 1,
+    "profileVersion": 2,
     "manufacturer": "Anycubic",
     "family": "Photon Mono",
     "name": "Photon Mono 4 Ultra",
@@ -18,6 +18,10 @@
     "pixelSize": {
       "x": 17,
       "y": 17
+    },
+    "bitDepth": {
+      "bits": 4,
+      "description": "4-bit color depth, 16 grayscale levels for anti-aliasing"
     },
     "display": {
       "resolutionX": 9024,
@@ -167,7 +171,7 @@
   },
   {
     "presetId": "anycubic-photon-mono-se-pwms",
-    "profileVersion": 3,
+    "profileVersion": 4,
     "manufacturer": "Anycubic",
     "family": "Photon Mono",
     "name": "Photon Mono SE",
@@ -184,6 +188,10 @@
     "pixelSize": {
       "x": 51,
       "y": 51
+    },
+    "bitDepth": {
+      "bits": 4,
+      "description": "4-bit color depth, 16 grayscale levels for anti-aliasing"
     },
     "display": {
       "resolutionX": 2560,
