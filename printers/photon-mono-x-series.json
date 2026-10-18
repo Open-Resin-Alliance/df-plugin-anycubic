@@ -1,7 +1,7 @@
 [
   {
     "presetId": "anycubic-photon-mono-x-6ks-px6s",
-    "profileVersion": 2,
+    "profileVersion": 3,
     "manufacturer": "Anycubic",
     "family": "Photon Mono X",
     "name": "Photon Mono X 6Ks",
@@ -30,7 +30,7 @@
       "formatVersion": "px6s",
       "settingsMode": "simple",
       "mirrorX": false,
-      "mirrorY": false
+      "mirrorY": true
     }
   },
   {
@@ -69,7 +69,7 @@
   },
   {
     "presetId": "anycubic-photon-mono-x2-pmx2",
-    "profileVersion": 2,
+    "profileVersion": 3,
     "manufacturer": "Anycubic",
     "family": "Photon Mono X",
     "name": "Photon Mono X2",
@@ -98,12 +98,12 @@
       "formatVersion": "pmx2",
       "settingsMode": "simple",
       "mirrorX": false,
-      "mirrorY": false
+      "mirrorY": true
     }
   },
   {
     "presetId": "anycubic-photon-mono-x-pwmx",
-    "profileVersion": 4,
+    "profileVersion": 5,
     "manufacturer": "Anycubic",
     "family": "Photon Mono X",
     "name": "Photon Mono X",
@@ -131,7 +131,7 @@
       "outputFormat": ".aff",
       "formatVersion": "pwmx",
       "settingsMode": "simple",
-      "mirrorX": false,
+      "mirrorX": true,
       "mirrorY": false
     }
   }

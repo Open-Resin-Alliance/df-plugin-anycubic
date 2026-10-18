@@ -1,7 +1,7 @@
 [
   {
     "presetId": "anycubic-photon-d2-dl2p",
-    "profileVersion": 2,
+    "profileVersion": 3,
     "manufacturer": "Anycubic",
     "family": "Photon",
     "name": "Photon D2",
@@ -29,7 +29,7 @@
       "outputFormat": ".aff",
       "formatVersion": "dl2p",
       "settingsMode": "simple",
-      "mirrorX": false,
+      "mirrorX": true,
       "mirrorY": false
     }
   },

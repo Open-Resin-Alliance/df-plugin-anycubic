@@ -1,7 +1,7 @@
 [
   {
     "presetId": "anycubic-photon-mono-4-ultra-pm4u",
-    "profileVersion": 2,
+    "profileVersion": 3,
     "manufacturer": "Anycubic",
     "family": "Photon Mono",
     "name": "Photon Mono 4 Ultra",
@@ -29,13 +29,13 @@
       "outputFormat": ".azf",
       "formatVersion": "pm4u",
       "settingsMode": "simple",
-      "mirrorX": false,
+      "mirrorX": true,
       "mirrorY": false
     }
   },
   {
     "presetId": "anycubic-photon-mono-4-pm4n",
-    "profileVersion": 2,
+    "profileVersion": 3,
     "manufacturer": "Anycubic",
     "family": "Photon Mono",
     "name": "Photon Mono 4",
@@ -63,13 +63,13 @@
       "outputFormat": ".aff",
       "formatVersion": "pm4n",
       "settingsMode": "simple",
-      "mirrorX": false,
+      "mirrorX": true,
       "mirrorY": false
     }
   },
   {
     "presetId": "anycubic-photon-mono-2-pm3n",
-    "profileVersion": 2,
+    "profileVersion": 3,
     "manufacturer": "Anycubic",
     "family": "Photon Mono",
     "name": "Photon Mono 2",
@@ -97,13 +97,13 @@
       "outputFormat": ".aff",
       "formatVersion": "pm3n",
       "settingsMode": "simple",
-      "mirrorX": false,
+      "mirrorX": true,
       "mirrorY": false
     }
   },
   {
     "presetId": "anycubic-photon-mono-4k-pwma",
-    "profileVersion": 2,
+    "profileVersion": 3,
     "manufacturer": "Anycubic",
     "family": "Photon Mono",
     "name": "Photon Mono 4K",
@@ -131,13 +131,13 @@
       "outputFormat": ".aff",
       "formatVersion": "pwma",
       "settingsMode": "simple",
-      "mirrorX": false,
+      "mirrorX": true,
       "mirrorY": false
     }
   },
   {
     "presetId": "anycubic-photon-mono-pwmo",
-    "profileVersion": 2,
+    "profileVersion": 3,
     "manufacturer": "Anycubic",
     "family": "Photon Mono",
     "name": "Photon Mono",
@@ -165,13 +165,13 @@
       "outputFormat": ".aff",
       "formatVersion": "pwmo",
       "settingsMode": "simple",
-      "mirrorX": false,
+      "mirrorX": true,
       "mirrorY": false
     }
   },
   {
     "presetId": "anycubic-photon-mono-se-pwms",
-    "profileVersion": 4,
+    "profileVersion": 5,
     "manufacturer": "Anycubic",
     "family": "Photon Mono",
     "name": "Photon Mono SE",
@@ -199,7 +199,7 @@
       "outputFormat": ".aff",
       "formatVersion": "pwms",
       "settingsMode": "simple",
-      "mirrorX": false,
+      "mirrorX": true,
       "mirrorY": false
     }
   },
