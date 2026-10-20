@@ -8,7 +8,7 @@
     "imageAssetPath": "./assets/photon-mono/photon-mono-4-ultra.png",
     "antiAliasing": true,
     "hasCamera": false,
-    "networkSupport": null,
+    "networkSupport": "sdcp",
     "networkFilter": "Photon Mono 4 Ultra",
     "buildVolumeMm": {
       "width": 153.408,
