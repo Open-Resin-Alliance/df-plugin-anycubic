@@ -15,7 +15,9 @@ use crate::types::{LayerAreaStatsV3, SliceJobV3};
 
 use super::afz_metadata::{AfzBuildModel, AfzMachineProfile, AfzTimingModel};
 use super::afz_preview;
-use std::io::{Cursor, Write};
+use super::layer_spool::StoredLayer;
+use std::fs::File;
+use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 use zip::write::FileOptions;
 use zip::ZipWriter;
 
@@ -33,23 +35,43 @@ const SCENE_SOFTWARE_LEN: usize = 64;
 const SCENE_PADDING_U32S: usize = 64;
 const SCENE_LAYER_DEF_PADDING_U32S: usize = 8;
 
-/// A prepared (PW0-encoded) layer ready for writing into the ZIP.
-pub(super) struct AfzPreparedLayer {
-    pub index: usize,
-    pub encoded: Vec<u8>,
-    pub non_zero_pixel_count: u32,
-}
-
 /// Build the complete AFZ ZIP container as an in-memory byte vector.
 pub(super) fn build_afz_container(
     job: &SliceJobV3,
     timing: &AfzTimingModel,
     build: &AfzBuildModel,
     profile: &AfzMachineProfile,
-    layers: &[AfzPreparedLayer],
+    layers: &[StoredLayer],
     layer_area_stats: &[LayerAreaStatsV3],
+    payloads: &mut File,
     on_progress: Option<&dyn Fn(u32, u32)>,
 ) -> Result<Vec<u8>, SlicerV3Error> {
+    write_afz_container(
+        job,
+        timing,
+        build,
+        profile,
+        layers,
+        layer_area_stats,
+        payloads,
+        Cursor::new(Vec::new()),
+        on_progress,
+    )
+    .map(Cursor::into_inner)
+}
+
+/// Write an AFZ ZIP directly to the output, reading indexed payload extents from scratch.
+pub(super) fn write_afz_container<W: Write + Seek>(
+    job: &SliceJobV3,
+    timing: &AfzTimingModel,
+    build: &AfzBuildModel,
+    profile: &AfzMachineProfile,
+    layers: &[StoredLayer],
+    layer_area_stats: &[LayerAreaStatsV3],
+    payloads: &mut File,
+    output: W,
+    on_progress: Option<&dyn Fn(u32, u32)>,
+) -> Result<W, SlicerV3Error> {
     let total_steps = (layers.len() as u32) + 4; // layers + manifests + scene + previews + done
     let mut step: u32 = 0;
     let mut advance = |steps: u32| {
@@ -59,9 +81,7 @@ pub(super) fn build_afz_container(
         }
     };
 
-    let buf = Vec::with_capacity(4 * 1024 * 1024);
-    let cursor = Cursor::new(buf);
-    let mut zip = ZipWriter::new(cursor);
+    let mut zip = ZipWriter::new(output);
     let options: FileOptions =
         FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
@@ -122,7 +142,15 @@ pub(super) fn build_afz_container(
     for layer in layers {
         let name = format!("layer_images/layer_{}.pw0Img", layer.index);
         zip.start_file(&name, options)?;
-        zip.write_all(&layer.encoded)?;
+        payloads.seek(SeekFrom::Start(layer.offset))?;
+        let copied = io::copy(&mut (&mut *payloads).take(layer.encoded_len), &mut zip)?;
+        if copied != layer.encoded_len {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                format!("truncated AFZ payload for layer {}", layer.index),
+            )
+            .into());
+        }
         advance(1);
     }
 
@@ -133,11 +161,11 @@ pub(super) fn build_afz_container(
 
     advance(1);
 
-    let cursor = zip.finish()?;
+    let output = zip.finish()?;
 
     advance(1);
 
-    Ok(cursor.into_inner())
+    Ok(output)
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -377,7 +405,7 @@ fn build_settings_json(
     )
 }
 
-fn build_layers_controller_json(timing: &AfzTimingModel, layers: &[AfzPreparedLayer]) -> String {
+fn build_layers_controller_json(timing: &AfzTimingModel, layers: &[StoredLayer]) -> String {
     let mut entries = Vec::with_capacity(layers.len());
     let mut min_height: f32 = 0.0;
 
@@ -448,7 +476,7 @@ fn build_print_info_json(
     job: &SliceJobV3,
     timing: &AfzTimingModel,
     build: &AfzBuildModel,
-    layers: &[AfzPreparedLayer],
+    layers: &[StoredLayer],
     layer_area_stats: &[LayerAreaStatsV3],
 ) -> String {
     // Pixel area in mm²
@@ -610,7 +638,7 @@ fn build_scene_binary(
     job: &SliceJobV3,
     timing: &AfzTimingModel,
     build: &AfzBuildModel,
-    layers: &[AfzPreparedLayer],
+    layers: &[StoredLayer],
     layer_area_stats: &[LayerAreaStatsV3],
 ) -> Vec<u8> {
     let layer_count = layers.len() as u32;
@@ -699,7 +727,7 @@ fn build_scene_binary(
 }
 
 fn layer_solid_pixel_count(
-    layers: &[AfzPreparedLayer],
+    layers: &[StoredLayer],
     layer_area_stats: &[LayerAreaStatsV3],
     layer_index: usize,
 ) -> u32 {
@@ -707,9 +735,9 @@ fn layer_solid_pixel_count(
         .get(layer_index)
         .map(|stats| stats.total_solid_pixels)
         .or_else(|| {
-            layers
-                .iter()
-                .find(|layer| layer.index == layer_index)
+            layers.get(layer_index)
+                .filter(|layer| layer.index == layer_index)
+                .or_else(|| layers.iter().find(|layer| layer.index == layer_index))
                 .map(|layer| layer.non_zero_pixel_count)
         })
         .unwrap_or(0)
@@ -719,6 +747,65 @@ fn layer_solid_pixel_count(
 mod tests {
     use super::*;
     use crate::types::SliceJobV3;
+    use std::fs::OpenOptions;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct ScratchFile {
+        file: Option<File>,
+        path: PathBuf,
+    }
+
+    impl ScratchFile {
+        fn new(bytes: &[u8]) -> Self {
+            static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+            loop {
+                let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+                let path = std::env::temp_dir().join(format!(
+                    "anycubic-afz-test-{}-{id}",
+                    std::process::id()
+                ));
+                match OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)
+                {
+                    Ok(file) => {
+                        let mut scratch = Self { file: Some(file), path };
+                        scratch.file().write_all(bytes).expect("write fixture payload");
+                        return scratch;
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => panic!("create fixture file: {error}"),
+                }
+            }
+        }
+
+        fn file(&mut self) -> &mut File {
+            self.file.as_mut().expect("fixture file is open")
+        }
+    }
+
+    impl Drop for ScratchFile {
+        fn drop(&mut self) {
+            drop(self.file.take());
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+
+    fn read_entries<R: Read + Seek>(reader: R) -> Vec<(String, Vec<u8>)> {
+        let mut archive = zip::ZipArchive::new(reader).expect("valid ZIP");
+        (0..archive.len())
+            .map(|index| {
+                let mut entry = archive.by_index(index).expect("ZIP entry");
+                let name = entry.name().to_string();
+                let mut bytes = Vec::new();
+                entry.read_to_end(&mut bytes).expect("read ZIP entry");
+                (name, bytes)
+            })
+            .collect()
+    }
 
     fn make_test_job() -> SliceJobV3 {
         SliceJobV3 {
@@ -744,16 +831,17 @@ mod tests {
         let job = make_test_job();
         let timing = super::super::afz_metadata::parse_afz_timing_model(&job);
         let build = super::super::afz_metadata::parse_afz_build_model(&job);
-        let layers = vec![AfzPreparedLayer {
+        let layers = vec![StoredLayer {
             index: 0,
-            encoded: vec![0x00, 16],
+            offset: 0,
+            encoded_len: 2,
             non_zero_pixel_count: 0,
         }];
 
         let scene = build_scene_binary(&job, &timing, &build, &layers, &[]);
 
         // Check magic
-        assert_eq!(&scene[0..14], b"ANYCUBIC-PWSZ\0");
+        assert_eq!(&scene[..SCENE_MAGIC.len()], SCENE_MAGIC);
 
         // Find separator and end marker
         let sep_pos = scene
@@ -768,46 +856,92 @@ mod tests {
     }
 
     #[test]
-    fn afz_container_produces_valid_zip() {
+    fn afz_file_writer_preserves_entry_order_payload_extents_and_metadata() {
         let job = make_test_job();
         let timing = super::super::afz_metadata::parse_afz_timing_model(&job);
-        let build = super::super::afz_metadata::parse_afz_build_model(&job);
+        let mut build = super::super::afz_metadata::parse_afz_build_model(&job);
+        build.display_width_mm = 10.0;
+        build.display_height_mm = 20.0;
+        // Physical arrival order is layer 1, then layer 0, then unrelated bytes.
+        let mut payloads = ScratchFile::new(&[0xF0, 8, 0x00, 8, 0x00, 16, 0xAA]);
         let layers = vec![
-            AfzPreparedLayer {
+            StoredLayer {
                 index: 0,
-                encoded: vec![0x00, 16],
+                offset: 4,
+                encoded_len: 2,
                 non_zero_pixel_count: 0,
             },
-            AfzPreparedLayer {
+            StoredLayer {
                 index: 1,
-                encoded: vec![0xF0, 8, 0x00, 8],
+                offset: 0,
+                encoded_len: 4,
                 non_zero_pixel_count: 8,
             },
         ];
-
         let profile = super::super::afz_metadata::machine_profile_for_suffix(&build.key_suffix);
-        let bytes = build_afz_container(&job, &timing, &build, profile, &layers, &[], None)
-            .expect("should build");
-
-        // Verify it's a valid ZIP
-        let cursor = Cursor::new(&bytes);
-        let mut archive = zip::ZipArchive::new(cursor).expect("should be valid ZIP");
-
-        let expected_files = [
+        let bytes = build_afz_container(
+            &job, &timing, &build, profile, &layers, &[], payloads.file(), None,
+        )
+        .expect("build bytes");
+        let mut output = ScratchFile::new(&[]);
+        write_afz_container(
+            &job, &timing, &build, profile, &layers, &[], payloads.file(), output.file(), None,
+        )
+        .expect("write archive file");
+        output.file().rewind().expect("rewind archive");
+        let entries = read_entries(output.file());
+        assert_eq!(entries, read_entries(Cursor::new(bytes)));
+        let expected_names = [
             SETTINGS_FILE,
-            LAYERS_FILE,
             PRINT_INFO_FILE,
             SOFTWARE_INFO_FILE,
-            SCENE_FILE,
+            "preview_images/preview_0.png",
+            "preview_images/preview_1.png",
+            "preview_images/preview_2.png",
+            LAYERS_FILE,
+            LCD_FUNCTION_FILE,
             "layer_images/layer_0.pw0Img",
             "layer_images/layer_1.pw0Img",
+            SCENE_FILE,
         ];
+        let names: Vec<_> = entries.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, expected_names);
+        assert_eq!(entries[8].1, [0x00, 16]);
+        assert_eq!(entries[9].1, [0xF0, 8, 0x00, 8]);
+        let controller: serde_json::Value = serde_json::from_slice(&entries[6].1).unwrap();
+        assert_eq!(controller["count"], 2);
+        assert_eq!(controller["paras"][0]["layer_index"], 0);
+        assert_eq!(controller["paras"][1]["layer_index"], 1);
+        assert_eq!(controller["paras"][1]["layer_minheight"], 0.05);
+        let print_info: serde_json::Value = serde_json::from_slice(&entries[1].1).unwrap();
+        assert!((print_info["volume"].as_f64().unwrap() - 0.005).abs() < 1e-6);
+    }
 
-        for name in &expected_files {
-            assert!(
-                archive.by_name(name).is_ok(),
-                "missing expected file: {name}"
-            );
-        }
+    #[test]
+    fn afz_writer_rejects_truncated_payload_extent() {
+        let job = make_test_job();
+        let timing = super::super::afz_metadata::parse_afz_timing_model(&job);
+        let build = super::super::afz_metadata::parse_afz_build_model(&job);
+        let profile = super::super::afz_metadata::machine_profile_for_suffix(&build.key_suffix);
+        let mut payloads = ScratchFile::new(&[0x00, 16]);
+        let layers = [StoredLayer {
+            index: 0,
+            offset: 1,
+            encoded_len: 2,
+            non_zero_pixel_count: 0,
+        }];
+        let error = write_afz_container(
+            &job,
+            &timing,
+            &build,
+            profile,
+            &layers,
+            &[],
+            payloads.file(),
+            Cursor::new(Vec::new()),
+            None,
+        )
+        .expect_err("short payload must fail instead of producing an incomplete entry");
+        assert!(error.to_string().contains("truncated AFZ payload for layer 0"));
     }
 }

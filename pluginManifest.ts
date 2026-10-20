@@ -25,7 +25,7 @@ export const ANYCUBIC_PLUGIN_MANIFEST = {
   schemaVersion: 1,
   id: 'anycubic-builtin',
   name: 'Anycubic Plugin',
-  version: '0.1.0',
+  version: '0.1.1',
   description: 'Anycubic printer profile pack (AFF and AZF format support).',
   printerPresets: [
     ...mapPresets(photonPPrinters as Record<string, unknown>[]),

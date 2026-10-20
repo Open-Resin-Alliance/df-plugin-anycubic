@@ -2,28 +2,30 @@
 //!
 //! Writes a sequential binary file:
 //!   FileMark (12 + N bytes) -> Header table -> Preview table ->
-//!   [optional version-gated tables] -> LayerDef table (with backpatched
-//!   per-layer DataAddress/DataLength) -> raw layer RLE blob.
+//!   [optional version-gated tables] -> LayerDef table -> raw layer RLE blob.
 //!
 //! Each "named table" begins with a 12-byte NUL-padded ASCII name + 4-byte LE
-//! body length. Address fields in FileMark are backpatched after table writes.
+//! body length. Absolute addresses are calculated before the sequential writes.
 
-use std::io::{Cursor, Seek, SeekFrom, Write};
+use std::fs::File;
+use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
+
+use super::layer_spool::StoredLayer;
 
 // ── Primitive writers ───────────────────────────────────────────────
 
-pub(super) fn write_u32_le(out: &mut Cursor<Vec<u8>>, v: u32) -> std::io::Result<()> {
+pub(super) fn write_u32_le<W: Write>(out: &mut W, v: u32) -> std::io::Result<()> {
     out.write_all(&v.to_le_bytes())
 }
 
-pub(super) fn write_f32_le(out: &mut Cursor<Vec<u8>>, v: f32) -> std::io::Result<()> {
+pub(super) fn write_f32_le<W: Write>(out: &mut W, v: f32) -> std::io::Result<()> {
     out.write_all(&v.to_le_bytes())
 }
 
 /// Write a string padded with NUL bytes to exactly `fixed_len` bytes.
 /// Truncates if `value` is longer (leaving room for at least one NUL terminator).
-pub(super) fn write_padded_string(
-    out: &mut Cursor<Vec<u8>>,
+pub(super) fn write_padded_string<W: Write>(
+    out: &mut W,
     value: &str,
     fixed_len: usize,
 ) -> std::io::Result<()> {
@@ -39,8 +41,8 @@ pub(super) fn write_padded_string(
 }
 
 /// Write the 12-byte NUL-padded section name + 4-byte LE body length.
-pub(super) fn write_named_table_header(
-    out: &mut Cursor<Vec<u8>>,
+pub(super) fn write_named_table_header<W: Write>(
+    out: &mut W,
     name: &str,
     body_length: u32,
 ) -> std::io::Result<()> {
@@ -50,8 +52,8 @@ pub(super) fn write_named_table_header(
 
 /// Overwrite a u32 at a known absolute offset in the buffer.
 #[allow(dead_code)]
-pub(super) fn patch_u32_le(out: &mut Cursor<Vec<u8>>, abs_offset: u64, v: u32) -> std::io::Result<()> {
-    let saved = out.position();
+pub(super) fn patch_u32_le<W: Write + Seek>(out: &mut W, abs_offset: u64, v: u32) -> std::io::Result<()> {
+    let saved = out.stream_position()?;
     out.seek(SeekFrom::Start(abs_offset))?;
     out.write_all(&v.to_le_bytes())?;
     out.seek(SeekFrom::Start(saved))?;
@@ -132,8 +134,8 @@ pub(super) fn header_body_length_for_version(v: u16) -> u32 {
     }
 }
 
-pub(super) fn write_header_body(
-    out: &mut Cursor<Vec<u8>>,
+pub(super) fn write_header_body<W: Write + Seek>(
+    out: &mut W,
     version: u16,
     resolution_x: u32,
     resolution_y: u32,
@@ -147,7 +149,7 @@ pub(super) fn write_header_body(
     per_layer_settings: bool,
 ) -> std::io::Result<()> {
     let _ = build; // build dims go into Machine table, not Header
-    let start_pos = out.position();
+    let start_pos = out.stream_position()?;
 
     let total_lift = timing.lift_height_mm + timing.lift_height2_mm;
     let advanced_mode_flag: u32 = if version >= 516 && (timing.lift_height2_mm > 0.0 || timing.bottom_lift_height2_mm > 0.0) { 1 } else { 0 };
@@ -184,7 +186,7 @@ pub(super) fn write_header_body(
         write_u32_le(out, 0)?;                   // IntelligentMode
     }
 
-    let written = out.position() - start_pos;
+    let written = out.stream_position()? - start_pos;
     let expected = header_body_length_for_version(version) as u64;
     debug_assert_eq!(written, expected, "Header body length mismatch for v{version}: wrote {written}, expected {expected}");
     Ok(())
@@ -273,8 +275,8 @@ mod header_writer_tests {
 
 // ── Preview tables (raw RGB565 pixel buffers) ────────────────────────
 
-pub(super) fn write_preview_body(
-    out: &mut Cursor<Vec<u8>>,
+pub(super) fn write_preview_body<W: Write>(
+    out: &mut W,
     width: u32,
     height: u32,
     pixel_data: &[u8],
@@ -286,12 +288,9 @@ pub(super) fn write_preview_body(
     out.write_all(pixel_data)
 }
 
-pub(super) fn preview_body_length(width: u32, height: u32) -> u32 {
-    12 + (width * height * 2)
-}
 
-pub(super) fn write_preview2_body(
-    out: &mut Cursor<Vec<u8>>,
+pub(super) fn write_preview2_body<W: Write>(
+    out: &mut W,
     width: u32,
     height: u32,
     pixel_data: &[u8],
@@ -305,30 +304,6 @@ pub(super) fn write_preview2_body(
     out.write_all(pixel_data)
 }
 
-pub(super) fn preview2_body_length(width: u32, height: u32) -> u32 {
-    12 + (width * height * 2)
-}
-
-#[cfg(test)]
-mod preview_writer_tests {
-    use super::*;
-
-    #[test]
-    fn preview_body_length_matches_written_size() {
-        let pixels = vec![0u8; 224 * 168 * 2];
-        let mut c = Cursor::new(Vec::new());
-        write_preview_body(&mut c, 224, 168, &pixels).unwrap();
-        assert_eq!(c.into_inner().len() as u32, preview_body_length(224, 168));
-    }
-
-    #[test]
-    fn preview2_body_length_matches_written_size() {
-        let pixels = vec![0u8; 330 * 190 * 2];
-        let mut c = Cursor::new(Vec::new());
-        write_preview2_body(&mut c, 330, 190, &pixels).unwrap();
-        assert_eq!(c.into_inner().len() as u32, preview2_body_length(330, 190));
-    }
-}
 
 // ── Extra table (v516+) — TSMC two-stage lift parameters ────────────
 //
@@ -343,8 +318,8 @@ pub(super) const EXTRA_DECLARED_LENGTH: u32 = 24;
 /// Actual Extra body bytes emitted (all 14 fields).
 pub(super) const EXTRA_BODY_BYTES: u32 = 56;
 
-pub(super) fn write_extra_body(out: &mut Cursor<Vec<u8>>, timing: &AffTimingModel) -> std::io::Result<()> {
-    let start = out.position();
+pub(super) fn write_extra_body<W: Write + Seek>(out: &mut W, timing: &AffTimingModel) -> std::io::Result<()> {
+    let start = out.stream_position()?;
     // Bottom group
     write_u32_le(out, 2)?;                                  // [0] BottomLiftCount
     write_f32_le(out, timing.bottom_lift_height_mm)?;       // [1] BottomLiftHeight1
@@ -362,7 +337,7 @@ pub(super) fn write_extra_body(out: &mut Cursor<Vec<u8>>, timing: &AffTimingMode
     write_f32_le(out, timing.lift_speed2_mm_s)?;            // [12] LiftSpeed2
     write_f32_le(out, timing.retract_speed_mm_s)?;          // [13] RetractSpeed1
 
-    let written = out.position() - start;
+    let written = out.stream_position()? - start;
     debug_assert_eq!(written, EXTRA_BODY_BYTES as u64,
         "Extra body length wrong: wrote {written}, expected {EXTRA_BODY_BYTES}");
     Ok(())
@@ -384,15 +359,15 @@ pub(super) fn machine_table_length_for_version(v: u16) -> u32 {
     if v >= 518 { 224 } else { 156 }
 }
 
-pub(super) fn write_machine_body(
-    out: &mut Cursor<Vec<u8>>,
+pub(super) fn write_machine_body<W: Write + Seek>(
+    out: &mut W,
     version: u16,
     profile: &AffMachineProfile,
     build: &AffBuildModel,
     resolution_x: u32,
     resolution_y: u32,
 ) -> std::io::Result<()> {
-    let start = out.position();
+    let start = out.stream_position()?;
     let property_fields: u32 = if version >= 518 { 15 } else if version >= 517 { 7 } else { 1 };
 
     write_padded_string(out, &build.machine_name, 96)?;             // MachineName
@@ -419,7 +394,7 @@ pub(super) fn write_machine_body(
         // 4 + 4 + 32 + 4 + 4 + 2 + 2 + 16 = 68 -> body = 208.
     }
 
-    let written = out.position() - start;
+    let written = out.stream_position()? - start;
     let expected = (machine_table_length_for_version(version) - 16) as u64;
     debug_assert_eq!(written, expected,
         "Machine body length wrong for v{version}: wrote {written}, expected {expected}");
@@ -430,15 +405,15 @@ pub(super) fn write_machine_body(
 
 pub(super) const SOFTWARE_TABLE_LENGTH: u32 = 164;
 
-pub(super) fn write_software_body(out: &mut Cursor<Vec<u8>>) -> std::io::Result<()> {
-    let start = out.position();
+pub(super) fn write_software_body<W: Write + Seek>(out: &mut W) -> std::io::Result<()> {
+    let start = out.stream_position()?;
     write_padded_string(out, "DragonFruit", 32)?;                 // SoftwareName
     write_u32_le(out, SOFTWARE_TABLE_LENGTH)?;                    // TableLength (self-describing)
     write_padded_string(out, "1.0.0", 32)?;                       // Version
     let os_tag = format!("rust-{}-{}", std::env::consts::OS, std::env::consts::ARCH);
     write_padded_string(out, &os_tag, 64)?;                         // OperativeSystem
     write_padded_string(out, "3.3-CoreProfile", 32)?;             // OpenGLVersion
-    let written = out.position() - start;
+    let written = out.stream_position()? - start;
     debug_assert_eq!(written, SOFTWARE_TABLE_LENGTH as u64);
     Ok(())
 }
@@ -447,8 +422,8 @@ pub(super) fn write_software_body(out: &mut Cursor<Vec<u8>>) -> std::io::Result<
 
 pub(super) const MODEL_BODY_LENGTH: u32 = 32;
 
-pub(super) fn write_model_body(
-    out: &mut Cursor<Vec<u8>>,
+pub(super) fn write_model_body<W: Write>(
+    out: &mut W,
     display_w_mm: f32,
     display_h_mm: f32,
     print_height_mm: f32,
@@ -471,7 +446,7 @@ pub(super) fn write_model_body(
 #[allow(dead_code)]
 pub(super) const COLOR_TABLE_LENGTH: u32 = 4 + 4 + 16 + 4; // UseFullGrey(u32) + GreyMaxCount(u32) + Grey[16] + Unknown(u32)
 
-pub(super) fn write_color_table_body(out: &mut Cursor<Vec<u8>>, aa_level: u32) -> std::io::Result<()> {
+pub(super) fn write_color_table_body<W: Write>(out: &mut W, aa_level: u32) -> std::io::Result<()> {
     let count: u32 = aa_level.clamp(1, 16);
     write_u32_le(out, 0)?;       // UseFullGreyscale
     write_u32_le(out, count)?;   // GreyMaxCount
@@ -549,15 +524,6 @@ mod table_writer_tests {
 pub(super) const LAYER_DEF_ENTRY_SIZE: u32 = 32; // C# ClassSize constant
 pub(super) const SUB_LAYER_DEF_ENTRY_SIZE: u32 = 4 + 4 + 4 + 4*8; // DataAddress(u32) + DataLength(u32) + NonZeroPixels(u32) + 8 floats
 
-pub(super) fn layer_def_body_length(layer_count: u32) -> u32 {
-    4 + layer_count * LAYER_DEF_ENTRY_SIZE  // LayerCount(u32) + entries
-}
-
-pub(super) fn sub_layer_def_body_length(layer_count: u32) -> u32 {
-    // SubLayerDef table also has LayerCount(u32) + Index(u32) before the entries
-    4 + 4 + layer_count * SUB_LAYER_DEF_ENTRY_SIZE
-}
-
 /// One layer's per-layer parameters as written into LayerDef entries.
 pub(super) struct AffLayerEntry {
     pub data_address: u32,
@@ -569,9 +535,9 @@ pub(super) struct AffLayerEntry {
     pub non_zero_pixel_count: u32,
 }
 
-pub(super) fn write_layer_def_body(
-    out: &mut Cursor<Vec<u8>>,
-    layers: &[AffLayerEntry],
+pub(super) fn write_layer_def_body<W: Write>(
+    out: &mut W,
+    layers: impl ExactSizeIterator<Item = AffLayerEntry>,
 ) -> std::io::Result<()> {
     write_u32_le(out, layers.len() as u32)?;
     for entry in layers {
@@ -587,9 +553,9 @@ pub(super) fn write_layer_def_body(
     Ok(())
 }
 
-pub(super) fn write_sub_layer_def_body(
-    out: &mut Cursor<Vec<u8>>,
-    layers: &[AffLayerEntry],
+pub(super) fn write_sub_layer_def_body<W: Write>(
+    out: &mut W,
+    layers: impl ExactSizeIterator<Item = AffLayerEntry>,
 ) -> std::io::Result<()> {
     write_u32_le(out, layers.len() as u32)?;
     write_u32_le(out, 1)?; // Index (always 1 per UVTools default)
@@ -651,12 +617,12 @@ pub(super) fn number_of_tables_for_version(v: u16) -> u32 {
     }
 }
 
-pub(super) fn write_filemark(
-    out: &mut Cursor<Vec<u8>>,
+pub(super) fn write_filemark<W: Write + Seek>(
+    out: &mut W,
     version: u16,
     addresses: &FileMarkAddresses,
 ) -> std::io::Result<()> {
-    let start = out.position();
+    let start = out.stream_position()?;
     write_padded_string(out, "ANYCUBIC", 12)?;                // Mark
     write_u32_le(out, version as u32)?;                       // Version
     write_u32_le(out, number_of_tables_for_version(version))?; // NumberOfTables
@@ -677,7 +643,7 @@ pub(super) fn write_filemark(
         write_u32_le(out, addresses.sub_layer_definition)?;   // SubLayerDefinitionAddress
         write_u32_le(out, addresses.preview2)?;               // Preview2Address
     }
-    let written = out.position() - start;
+    let written = out.stream_position()? - start;
     let expected = filemark_length_for_version(version) as u64;
     debug_assert_eq!(written, expected,
         "FileMark length wrong for v{version}: wrote {written}, expected {expected}");
@@ -697,7 +663,7 @@ mod layer_and_filemark_tests {
             non_zero_pixel_count: 12345,
         };
         let mut c = Cursor::new(Vec::new());
-        write_layer_def_body(&mut c, std::slice::from_ref(&entry)).unwrap();
+        write_layer_def_body(&mut c, std::iter::once(entry)).unwrap();
         // 4 (LayerCount) + 32 (entry)
         assert_eq!(c.into_inner().len(), 36);
     }
@@ -711,7 +677,7 @@ mod layer_and_filemark_tests {
             non_zero_pixel_count: 0,
         };
         let mut c = Cursor::new(Vec::new());
-        write_sub_layer_def_body(&mut c, std::slice::from_ref(&entry)).unwrap();
+        write_sub_layer_def_body(&mut c, std::iter::once(entry)).unwrap();
         // 4 (LayerCount) + 4 (Index) + 44 (entry: 3*u32 + 8*f32)
         assert_eq!(c.into_inner().len(), 52);
     }
@@ -745,130 +711,148 @@ use super::aff_preview::build_preview_rgb565;
 use crate::engine::SlicerV3Error;
 use crate::types::SliceJobV3;
 
-pub(super) struct AffPreparedLayer {
-    pub index: usize,
-    pub encoded: Vec<u8>,
-    pub non_zero_pixel_count: u32,
-}
-
 pub(super) fn build_aff_container(
     job: &SliceJobV3,
     timing: &AffTimingModel,
     build: &AffBuildModel,
     profile: &AffMachineProfile,
-    layers: &[AffPreparedLayer],
+    layers: &[StoredLayer],
+    payloads: &mut File,
 ) -> Result<Vec<u8>, SlicerV3Error> {
+    let output = write_aff_container(job, timing, build, profile, layers, payloads, Cursor::new(Vec::new()))?;
+    Ok(output.into_inner())
+}
+
+/// Writes an AFF file from sorted layer metadata and scratch-file extents.
+/// The output is written from offset zero and returned positioned at its end.
+pub(super) fn write_aff_container<W: Write + Seek>(
+    job: &SliceJobV3,
+    timing: &AffTimingModel,
+    build: &AffBuildModel,
+    profile: &AffMachineProfile,
+    layers: &[StoredLayer],
+    payloads: &mut File,
+    mut output: W,
+) -> Result<W, SlicerV3Error> {
     let version = profile.max_version;
-    let layer_count = layers.len() as u32;
+    let overflow = || io::Error::new(io::ErrorKind::InvalidInput, "AFF file exceeds 32-bit format limits");
+    let layer_count = u32::try_from(layers.len()).map_err(|_| overflow())?;
+    let layer_def_len = layer_count.checked_mul(LAYER_DEF_ENTRY_SIZE)
+        .and_then(|n| n.checked_add(4)).ok_or_else(overflow)?;
+    let sub_layer_def_len = if version >= 518 {
+        layer_count.checked_mul(SUB_LAYER_DEF_ENTRY_SIZE)
+            .and_then(|n| n.checked_add(8)).ok_or_else(overflow)?
+    } else { 0 };
+    let preview_len = |size: [u32; 2]| -> io::Result<u32> {
+        size[0].checked_mul(size[1]).and_then(|n| n.checked_mul(2))
+            .and_then(|n| n.checked_add(28)).ok_or_else(overflow)
+    };
+    let preview_total = preview_len(profile.preview_size)?;
+    let preview2_total = if version >= 518 { preview_len(profile.preview2_size)? } else { 0 };
 
-    let mut cursor = Cursor::new(Vec::with_capacity(4 * 1024 * 1024));
+    // Calculate absolute addresses before writing; no layer-sized reservations
+    // or per-job table/payload buffers are needed.
+    let mut end = filemark_length_for_version(version);
+    let mut reserve = |length: u64| -> io::Result<u32> {
+        let start = end;
+        let length = u32::try_from(length).map_err(|_| overflow())?;
+        end = end.checked_add(length).ok_or_else(overflow)?;
+        Ok(start)
+    };
     let mut addresses = FileMarkAddresses::default();
+    addresses.header = reserve(16 + header_body_length_for_version(version) as u64)?;
+    addresses.preview = reserve(preview_total as u64)?;
+    if version >= 515 {
+        addresses.layer_image_color_table = reserve(COLOR_TABLE_LENGTH as u64)?;
+    }
+    addresses.layer_definition = reserve(16 + layer_def_len as u64)?;
+    if version >= 516 {
+        // Extra declares 24 bytes but actually serializes its 56-byte body.
+        addresses.extra = reserve(16 + EXTRA_BODY_BYTES as u64)?;
+        addresses.machine = reserve(machine_table_length_for_version(version) as u64)?;
+    }
+    if version >= 517 {
+        addresses.software = reserve(SOFTWARE_TABLE_LENGTH as u64)?;
+        addresses.model = reserve(16 + MODEL_BODY_LENGTH as u64)?;
+    }
+    if version >= 518 {
+        addresses.sub_layer_definition = reserve(16 + sub_layer_def_len as u64)?;
+        addresses.preview2 = reserve(preview2_total as u64)?;
+    }
+    addresses.layer_image = reserve(0)?;
+    for layer in layers {
+        reserve(layer.encoded_len)?;
+    }
 
-    // 1. FileMark placeholder (zeros for now, backpatched at end)
-    let filemark_len = filemark_length_for_version(version);
-    cursor.write_all(&vec![0u8; filemark_len as usize])?;
-
-    // 2. Header
-    addresses.header = cursor.position() as u32;
-    write_named_table_header(&mut cursor, "HEADER", header_body_length_for_version(version))?;
-    let print_time_sec = compute_print_time_sec(timing, layers.len() as u32) as u32;
+    output.seek(SeekFrom::Start(0))?;
+    write_filemark(&mut output, version, &addresses)?;
+    write_named_table_header(&mut output, "HEADER", header_body_length_for_version(version))?;
+    let print_time_sec = compute_print_time_sec(timing, layer_count) as u32;
     let volume_ml = compute_volume_ml(timing, build, job, layers);
     let weight_g = volume_ml * build.resin_density;
     let cost = if build.resin_volume_ml > 0.0 {
         (volume_ml / build.resin_volume_ml) * build.resin_price
     } else { 0.0 };
-
     write_header_body(
-        &mut cursor, version,
-        job.source_width_px, job.source_height_px,
-        timing, build, profile,
-        print_time_sec, volume_ml, weight_g, cost, false,
+        &mut output, version, job.source_width_px, job.source_height_px,
+        timing, build, profile, print_time_sec, volume_ml, weight_g, cost, false,
     )?;
 
-    // 3. Preview (raw RGB565)
-    let prev_w = profile.preview_size[0];
-    let prev_h = profile.preview_size[1];
+    // Preview TableLength includes the named-table header.
+    let [prev_w, prev_h] = profile.preview_size;
     let preview_pixels = build_preview_rgb565(job.export_thumbnail_png_base64.as_deref(), prev_w, prev_h);
-    addresses.preview = cursor.position() as u32;
-    // Preview is IncludeBaseTableLength=true: TableLength field = whole table (body + 16).
-    write_named_table_header(&mut cursor, "PREVIEW", preview_body_length(prev_w, prev_h) + 16)?;
-    write_preview_body(&mut cursor, prev_w, prev_h, &preview_pixels)?;
-
-    // 4. LayerImageColorTable (v515+)
+    write_named_table_header(&mut output, "PREVIEW", preview_total)?;
+    write_preview_body(&mut output, prev_w, prev_h, &preview_pixels)?;
     if version >= 515 {
-        addresses.layer_image_color_table = cursor.position() as u32;
-        // NOTE: this table is NOT preceded by a named header in UVTools — it's
-        // written via plain serialization. We write only its body, prefixed by
-        // its own length field embedded above? Re-check UVTools:
-        // Actually Section/AnycubicNamedTable wraps everything else; the
-        // LayerImageColorTable struct extends from no base class - it's just
-        // serialized raw. So we write only the body bytes (no name+length header).
-        write_color_table_body(&mut cursor, timing.anti_alias_level)?;
+        // This color table is serialized raw, without a named-table wrapper.
+        write_color_table_body(&mut output, timing.anti_alias_level)?;
     }
-
-    // 5. Reserve LayerDef table (size known: name+len+body)
-    addresses.layer_definition = cursor.position() as u32;
-    let layer_def_total = 16 + layer_def_body_length(layer_count); // 12-byte name + 4-byte length + body
-    cursor.write_all(&vec![0u8; layer_def_total as usize])?;
-
-    // 6. Extra (v516+)
+    write_named_table_header(&mut output, "LAYERDEF", layer_def_len)?;
+    write_layer_def_body(&mut output, aff_layer_entries(layers, timing, addresses.layer_image))?;
     if version >= 516 {
-        addresses.extra = cursor.position() as u32;
-        // Extra declares TableLength=24 (UVTools quirk) but emits a 56-byte body.
-        write_named_table_header(&mut cursor, "EXTRA", EXTRA_DECLARED_LENGTH)?;
-        write_extra_body(&mut cursor, timing)?;
+        write_named_table_header(&mut output, "EXTRA", EXTRA_DECLARED_LENGTH)?;
+        write_extra_body(&mut output, timing)?;
+        write_named_table_header(&mut output, "MACHINE", machine_table_length_for_version(version))?;
+        write_machine_body(&mut output, version, profile, build, job.source_width_px, job.source_height_px)?;
     }
-
-    // 7. Machine (v516+)
-    if version >= 516 {
-        addresses.machine = cursor.position() as u32;
-        // Machine is IncludeBaseTableLength=true: TableLength field = whole table (156/224).
-        write_named_table_header(&mut cursor, "MACHINE", machine_table_length_for_version(version))?;
-        write_machine_body(&mut cursor, version, profile, build, job.source_width_px, job.source_height_px)?;
-    }
-
-    // 8. Software (v517+) — not wrapped in named header; the struct embeds its own name+length
     if version >= 517 {
-        addresses.software = cursor.position() as u32;
-        write_software_body(&mut cursor)?;
-    }
-
-    // 9. Model (v517+)
-    if version >= 517 {
-        addresses.model = cursor.position() as u32;
-        // Model is IncludeBaseTableLength=true: TableLength field = whole table (body + 16).
-        write_named_table_header(&mut cursor, "MODEL", MODEL_BODY_LENGTH + 16)?;
+        write_software_body(&mut output)?;
+        write_named_table_header(&mut output, "MODEL", MODEL_BODY_LENGTH + 16)?;
         let print_height = timing.layer_height_mm * layer_count as f32;
-        write_model_body(&mut cursor, build.display_width_mm, build.display_height_mm, print_height)?;
+        write_model_body(&mut output, build.display_width_mm, build.display_height_mm, print_height)?;
     }
-
-    // 10. SubLayerDef reservation (v518+)
     if version >= 518 {
-        addresses.sub_layer_definition = cursor.position() as u32;
-        let sub_total = 16 + sub_layer_def_body_length(layer_count);
-        cursor.write_all(&vec![0u8; sub_total as usize])?;
-    }
-
-    // 11. Preview2 (v518+)
-    if version >= 518 {
-        let p2w = profile.preview2_size[0];
-        let p2h = profile.preview2_size[1];
+        write_named_table_header(&mut output, "SUBIMGS", sub_layer_def_len + 16)?;
+        write_sub_layer_def_body(&mut output, aff_layer_entries(layers, timing, addresses.layer_image))?;
+        let [p2w, p2h] = profile.preview2_size;
         let p2_pixels = build_preview_rgb565(job.export_thumbnail_png_base64.as_deref(), p2w, p2h);
-        addresses.preview2 = cursor.position() as u32;
-        // Preview2 is IncludeBaseTableLength=true: TableLength field = whole table (body + 16).
-        write_named_table_header(&mut cursor, "PREVIEW2", preview2_body_length(p2w, p2h) + 16)?;
-        write_preview2_body(&mut cursor, p2w, p2h, &p2_pixels)?;
+        write_named_table_header(&mut output, "PREVIEW2", preview2_total)?;
+        write_preview2_body(&mut output, p2w, p2h, &p2_pixels)?;
     }
 
-    // 12. Layer image blob
-    addresses.layer_image = cursor.position() as u32;
-    let mut entries: Vec<AffLayerEntry> = Vec::with_capacity(layers.len());
-    let transition_start = timing.bottom_layer_count;
-    let transition_end = transition_start + timing.transition_layer_count;
     for layer in layers {
-        let layer_idx = layer.index as u32;
-        let is_bottom = layer_idx < transition_start;
+        payloads.seek(SeekFrom::Start(layer.offset))?;
+        let copied = io::copy(&mut (&mut *payloads).take(layer.encoded_len), &mut output)?;
+        if copied != layer.encoded_len {
+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, format!(
+                "AFF layer {} scratch extent is truncated: expected {} bytes, read {}",
+                layer.index, layer.encoded_len, copied,
+            )).into());
+        }
+    }
+    Ok(output)
+}
 
+fn aff_layer_entries<'a>(
+    layers: &'a [StoredLayer],
+    timing: &'a AffTimingModel,
+    mut data_address: u32,
+) -> impl ExactSizeIterator<Item = AffLayerEntry> + 'a {
+    let transition_start = timing.bottom_layer_count as u64;
+    let transition_end = transition_start + timing.transition_layer_count as u64;
+    layers.iter().map(move |layer| {
+        let layer_idx = layer.index as u64;
+        let is_bottom = layer_idx < transition_start;
         let exposure = if is_bottom {
             timing.bottom_exposure_sec
         } else if layer_idx < transition_end && timing.transition_layer_count > 0 {
@@ -877,43 +861,21 @@ pub(super) fn build_aff_container(
         } else {
             timing.normal_exposure_sec
         };
-
-        let lift_h = if is_bottom { timing.bottom_lift_height_mm + timing.bottom_lift_height2_mm }
-                     else { timing.lift_height_mm + timing.lift_height2_mm };
-        let lift_s = if is_bottom { timing.bottom_lift_speed_mm_s } else { timing.lift_speed_mm_s };
-
-        let data_addr = cursor.position() as u32;
-        cursor.write_all(&layer.encoded)?;
-
-        entries.push(AffLayerEntry {
-            data_address: data_addr,
-            data_length: layer.encoded.len() as u32,
-            lift_height_mm: lift_h,
-            lift_speed_mm_s: lift_s,
+        // The layout pass checked every payload length and cumulative address.
+        let data_length = layer.encoded_len as u32;
+        let entry = AffLayerEntry {
+            data_address,
+            data_length,
+            lift_height_mm: if is_bottom { timing.bottom_lift_height_mm + timing.bottom_lift_height2_mm }
+                else { timing.lift_height_mm + timing.lift_height2_mm },
+            lift_speed_mm_s: if is_bottom { timing.bottom_lift_speed_mm_s } else { timing.lift_speed_mm_s },
             exposure_time_sec: exposure,
-            layer_height_mm: timing.layer_height_mm, // RELATIVE thickness, not absolute Z
+            layer_height_mm: timing.layer_height_mm, // relative thickness, not absolute Z
             non_zero_pixel_count: layer.non_zero_pixel_count,
-        });
-    }
-
-    // 13. Backpatch LayerDef
-    cursor.seek(SeekFrom::Start(addresses.layer_definition as u64))?;
-    write_named_table_header(&mut cursor, "LAYERDEF", layer_def_body_length(layer_count))?;
-    write_layer_def_body(&mut cursor, &entries)?;
-
-    // 14. Backpatch SubLayerDef (v518+)
-    if version >= 518 {
-        cursor.seek(SeekFrom::Start(addresses.sub_layer_definition as u64))?;
-        // SubLayerDef is IncludeBaseTableLength=true: TableLength field = whole table (body + 16).
-        write_named_table_header(&mut cursor, "SUBIMGS", sub_layer_def_body_length(layer_count) + 16)?;
-        write_sub_layer_def_body(&mut cursor, &entries)?;
-    }
-
-    // 15. Backpatch FileMark
-    cursor.seek(SeekFrom::Start(0))?;
-    write_filemark(&mut cursor, version, &addresses)?;
-
-    Ok(cursor.into_inner())
+        };
+        data_address += data_length;
+        entry
+    })
 }
 
 // ── Cost / time helpers ─────────────────────────────────────────────
@@ -940,7 +902,7 @@ fn compute_volume_ml(
     timing: &AffTimingModel,
     build: &AffBuildModel,
     job: &SliceJobV3,
-    layers: &[AffPreparedLayer],
+    layers: &[StoredLayer],
 ) -> f32 {
     let pixel_area_mm2 = (build.display_width_mm / job.source_width_px as f32)
                        * (build.display_height_mm / job.source_height_px as f32);
@@ -1004,25 +966,45 @@ mod build_container_tests {
         }
     }
 
-    fn one_layer() -> Vec<AffPreparedLayer> {
-        vec![AffPreparedLayer { index: 0, encoded: vec![0x00, 16], non_zero_pixel_count: 0 }]
+    fn with_payloads<T>(bytes: &[u8], f: impl FnOnce(&mut File) -> T) -> T {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "anycubic-aff-layout-{}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+            NEXT_ID.fetch_add(1, Ordering::Relaxed),
+        ));
+        let mut file = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path).unwrap();
+        file.write_all(bytes).unwrap();
+        let result = f(&mut file);
+        drop(file);
+        std::fs::remove_file(path).unwrap();
+        result
+    }
+
+    fn one_layer_container(profile: &AffMachineProfile) -> Vec<u8> {
+        let layers = [StoredLayer { index: 0, offset: 0, encoded_len: 2, non_zero_pixel_count: 0 }];
+        with_payloads(&[0x00, 16], |payloads| {
+            build_aff_container(&make_job(), &dummy_timing(), &pm3m_build(), profile, &layers, payloads).unwrap()
+        })
     }
 
     #[test]
     fn pm3m_v516_container_starts_with_anycubic_mark() {
-        let bytes = build_aff_container(&make_job(), &dummy_timing(), &pm3m_build(), &pm3m_profile(), &one_layer()).unwrap();
+        let bytes = one_layer_container(&pm3m_profile());
         assert_eq!(&bytes[..8], b"ANYCUBIC");
     }
 
     #[test]
     fn pm3m_v516_filemark_version_is_516() {
-        let bytes = build_aff_container(&make_job(), &dummy_timing(), &pm3m_build(), &pm3m_profile(), &one_layer()).unwrap();
+        let bytes = one_layer_container(&pm3m_profile());
         assert_eq!(&bytes[12..16], &516u32.to_le_bytes());
     }
 
     #[test]
     fn pm3m_v516_contains_header_extra_machine_table_names() {
-        let bytes = build_aff_container(&make_job(), &dummy_timing(), &pm3m_build(), &pm3m_profile(), &one_layer()).unwrap();
+        let bytes = one_layer_container(&pm3m_profile());
         assert!(bytes.windows(6).any(|w| w == b"HEADER"));
         assert!(bytes.windows(5).any(|w| w == b"EXTRA"));
         assert!(bytes.windows(7).any(|w| w == b"MACHINE"));
@@ -1032,7 +1014,7 @@ mod build_container_tests {
 
     #[test]
     fn header_address_points_to_HEADER_table() {
-        let bytes = build_aff_container(&make_job(), &dummy_timing(), &pm3m_build(), &pm3m_profile(), &one_layer()).unwrap();
+        let bytes = one_layer_container(&pm3m_profile());
         let header_addr = u32::from_le_bytes(bytes[20..24].try_into().unwrap()) as usize;
         assert_eq!(&bytes[header_addr..header_addr + 6], b"HEADER");
     }
@@ -1041,8 +1023,86 @@ mod build_container_tests {
     fn v518_container_includes_subimgs_and_preview2() {
         let mut profile = pm3m_profile();
         profile.max_version = 518;
-        let bytes = build_aff_container(&make_job(), &dummy_timing(), &pm3m_build(), &profile, &one_layer()).unwrap();
+        let bytes = one_layer_container(&profile);
         assert!(bytes.windows(7).any(|w| w == b"SUBIMGS"));
         assert!(bytes.windows(8).any(|w| w == b"PREVIEW2"));
+    }
+
+    fn u32_at(bytes: &[u8], offset: usize) -> u32 {
+        u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+    }
+
+    #[test]
+    fn file_writer_preserves_offsets_and_layer_order_for_all_aff_versions() {
+        for (version, expected_image_address) in [(1, 260), (515, 288), (516, 524), (517, 748), (518, 970)] {
+            let mut profile = pm3m_profile();
+            profile.max_version = version;
+            profile.preview_size = [2, 1];
+            profile.preview2_size = [1, 1];
+            if version == 1 {
+                profile.rle_format = AffRleFormat::Pws;
+                profile.layer_image_format = "pwsImg";
+            }
+            let layers = [
+                StoredLayer { index: 0, offset: 3, encoded_len: 2, non_zero_pixel_count: 4 },
+                StoredLayer { index: 1, offset: 0, encoded_len: 3, non_zero_pixel_count: 7 },
+            ];
+            let mut timing = dummy_timing();
+            timing.bottom_layer_count = 1;
+            let bytes = with_payloads(&[9, 8, 7, 1, 2, 99], |payloads| {
+                with_payloads(&[], |output| {
+                    let output = write_aff_container(&make_job(), &timing, &pm3m_build(), &profile, &layers, payloads, output).unwrap();
+                    assert_eq!(output.stream_position().unwrap(), expected_image_address as u64 + 5);
+                    output.seek(SeekFrom::Start(0)).unwrap();
+                    let mut bytes = Vec::new();
+                    output.read_to_end(&mut bytes).unwrap();
+                    bytes
+                })
+            });
+            let image_field = if version >= 516 { 48 } else { 44 };
+            assert_eq!(u32_at(&bytes, image_field), expected_image_address);
+            assert_eq!(&bytes[expected_image_address as usize..], &[1, 2, 9, 8, 7]);
+            let layer_def = u32_at(&bytes, 36) as usize;
+            assert_eq!(&bytes[layer_def..layer_def + 8], b"LAYERDEF");
+            assert_eq!(u32_at(&bytes, layer_def + 12), 68);
+            assert_eq!(u32_at(&bytes, layer_def + 16), 2);
+            for (index, length, non_zero, exposure) in [(0, 2, 4, 30.0f32), (1, 3, 7, 2.0f32)] {
+                let entry = layer_def + 20 + index * 32;
+                let address = expected_image_address + if index == 0 { 0 } else { 2 };
+                assert_eq!(u32_at(&bytes, entry), address);
+                assert_eq!(u32_at(&bytes, entry + 4), length);
+                assert_eq!(u32_at(&bytes, entry + 16), exposure.to_bits());
+                assert_eq!(u32_at(&bytes, entry + 20), timing.layer_height_mm.to_bits());
+                assert_eq!(u32_at(&bytes, entry + 24), non_zero);
+                if version == 518 {
+                    let sub_def = u32_at(&bytes, 56) as usize;
+                    assert_eq!(u32_at(&bytes, sub_def + 12), 112);
+                    let sub_entry = sub_def + 24 + index * 44;
+                    assert_eq!(u32_at(&bytes, sub_entry), address);
+                    assert_eq!(u32_at(&bytes, sub_entry + 4), length);
+                    assert_eq!(u32_at(&bytes, sub_entry + 8), non_zero);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn truncated_scratch_extent_is_reported_instead_of_shortening_layer() {
+        let layers = [StoredLayer { index: 0, offset: 1, encoded_len: 2, non_zero_pixel_count: 1 }];
+        with_payloads(&[9, 8], |payloads| {
+            let error = build_aff_container(&make_job(), &dummy_timing(), &pm3m_build(), &pm3m_profile(), &layers, payloads).unwrap_err();
+            assert!(error.to_string().contains("AFF layer 0 scratch extent is truncated"));
+        });
+    }
+
+    #[test]
+    fn payload_overflow_is_rejected_before_writing_output() {
+        let layers = [StoredLayer { index: 0, offset: 0, encoded_len: u32::MAX as u64, non_zero_pixel_count: 0 }];
+        with_payloads(&[], |payloads| {
+            let mut output = Cursor::new(Vec::new());
+            let error = write_aff_container(&make_job(), &dummy_timing(), &pm3m_build(), &pm3m_profile(), &layers, payloads, &mut output).unwrap_err();
+            assert!(error.to_string().contains("AFF file exceeds 32-bit format limits"));
+            assert!(output.into_inner().is_empty());
+        });
     }
 }
