@@ -30,7 +30,7 @@ fn flush_run(out: &mut Vec<u8>, colour: u8, reps: &mut u32) {
 
 /// Encode a raw 8-bit greyscale mask into PW0 RLE bytes.
 pub(super) fn encode_pw0(mask: &[u8]) -> Vec<u8> {
-    let mut out: Vec<u8> = Vec::with_capacity(mask.len() / 4);
+    let mut out: Vec<u8> = Vec::with_capacity((mask.len() / 4).min(32 * 1024));
     let mut last_colour: i32 = -1;
     let mut reps: u32 = 0;
 
@@ -96,7 +96,7 @@ pub(super) fn encode_pw0_from_rle(
     runs: &[crate::rle::RleRun],
     total_pixels: usize,
 ) -> Vec<u8> {
-    let mut out: Vec<u8> = Vec::with_capacity(total_pixels / 4);
+    let mut out: Vec<u8> = Vec::with_capacity((total_pixels / 4).min(32 * 1024));
 
     if runs.is_empty() {
         let mut remaining = total_pixels as u32;
@@ -145,6 +145,20 @@ pub(super) fn encode_pw0_from_rle(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sparse_p1_max_layer_does_not_reserve_a_quarter_of_the_display() {
+        let pixels = 11_520 * 8_640;
+        let encoded = encode_pw0_from_rle(&[], pixels);
+        let expected_words = (pixels + RLE4_ENCODING_LIMIT as usize - 1)
+            / RLE4_ENCODING_LIMIT as usize;
+        assert_eq!(encoded.len(), expected_words * 2);
+        assert!(encoded.capacity() <= encoded.len() * 2 + 32 * 1024);
+        let covered: usize = encoded.chunks_exact(2)
+            .map(|word| (u16::from_be_bytes([word[0], word[1]]) & 0x0fff) as usize)
+            .sum();
+        assert_eq!(covered, pixels);
+    }
 
     #[test]
     fn encode_all_black() {

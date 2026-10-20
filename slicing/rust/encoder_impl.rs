@@ -13,15 +13,19 @@ mod afz_metadata;
 mod afz_preview;
 mod anycubic_preview_common;
 mod anycubic_pw0;
+mod layer_spool;
 
 use crate::encoders::{FormatEncoder, RawMaskStreamEncoder, RleStreamEncoder};
 use crate::engine::SlicerV3Error;
 use crate::types::{LayerAreaStatsV3, RenderedLayersV3, SliceJobV3};
 
-use afz_layout::{build_afz_container, AfzPreparedLayer};
+use afz_layout::{build_afz_container, write_afz_container};
 use afz_metadata::{machine_profile_for_suffix, parse_afz_build_model, parse_afz_timing_model};
 
 use crossbeam_channel::bounded;
+use layer_spool::LayerSpool;
+use std::fs::File;
+use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -75,7 +79,7 @@ impl FormatEncoder for AffPluginEncoder {
             job: job.clone(),
             total_pixels,
             pws_aa_level,
-            prepared: Vec::with_capacity(job.total_layers as usize),
+            spool: LayerSpool::new(job.total_layers)?,
         })))
     }
 
@@ -101,63 +105,74 @@ impl FormatEncoder for AffPluginEncoder {
         _layer_area_stats: &[LayerAreaStatsV3],
         on_progress: Option<&dyn Fn(u32, u32)>,
     ) -> Result<Vec<u8>, SlicerV3Error> {
-        let report = |done, total| {
-            if let Some(cb) = on_progress {
-                cb(done, total);
-            }
-        };
-
-        let Some(raw_masks) = rendered_layers.raw_mask_layers.as_ref() else {
-            return Err(SlicerV3Error::MissingRenderedLayerPayload(
-                "raw mask layers are required for AFF encoding".to_string(),
-            ));
-        };
-        if raw_masks.is_empty() {
-            return Err(SlicerV3Error::MissingRenderedLayerPayload(
-                "no rendered layers were provided for AFF encoding".to_string(),
-            ));
-        }
-
-        let expected_pixels =
-            (job.source_width_px as usize).saturating_mul(job.source_height_px as usize);
+        let mut spool = prepare_aff_layers(job, rendered_layers, on_progress)?;
         let timing = parse_aff_timing_model(job);
         let build = parse_aff_build_model(job);
         let profile = aff_machine_profile_for_suffix(&build.key_suffix);
-
-        let total_layers = raw_masks.len();
-        let mut prepared = Vec::with_capacity(total_layers);
-        let total_units = job.total_layers.saturating_mul(2);
-
-        for (i, mask) in raw_masks.iter().enumerate() {
-            if mask.len() != expected_pixels {
-                return Err(SlicerV3Error::MissingRenderedLayerPayload(format!(
-                    "AFF layer {i} size mismatch: expected {expected_pixels} bytes, got {}",
-                    mask.len()
-                )));
-            }
-            let non_zero = mask.iter().filter(|&&b| b > 0).count() as u32;
-            let encoded = if aff_rle_format_for_suffix(&build.key_suffix) == AffRleFormat::Pws {
-                encode_pws(mask, timing.anti_alias_level as u8)
-            } else {
-                anycubic_pw0::encode_pw0(mask)
-            };
-            if encoded.is_empty() && non_zero > 0 {
-                return Err(SlicerV3Error::MissingRenderedLayerPayload(format!(
-                    "AFF layer {i} encoded to zero bytes (non_zero_pixels={non_zero})"
-                )));
-            }
-            prepared.push(AffPreparedLayer {
-                index: i,
-                encoded,
-                non_zero_pixel_count: non_zero,
-            });
-            report((i as u32).saturating_mul(2).saturating_add(1), total_units);
+        let (layers, payloads) = spool.ordered_parts()?;
+        let bytes = build_aff_container(job, &timing, &build, profile, layers, payloads)?;
+        if let Some(progress) = on_progress {
+            let total = job.total_layers.saturating_mul(2);
+            progress(total, total);
         }
-
-        let result = build_aff_container(job, &timing, &build, profile, &prepared)?;
-        report(total_units, total_units);
-        Ok(result)
+        Ok(bytes)
     }
+
+    fn encode_container_to_path(
+        &self, job: &SliceJobV3, rendered_layers: &RenderedLayersV3,
+        layer_area_stats: &[LayerAreaStatsV3], output_path: &Path,
+    ) -> Result<(), SlicerV3Error> {
+        self.encode_container_to_path_with_progress(job, rendered_layers, layer_area_stats, output_path, None)
+    }
+
+    fn encode_container_to_path_with_progress(
+        &self, job: &SliceJobV3, rendered_layers: &RenderedLayersV3,
+        _layer_area_stats: &[LayerAreaStatsV3], output_path: &Path,
+        on_progress: Option<&dyn Fn(u32, u32)>,
+    ) -> Result<(), SlicerV3Error> {
+        let mut spool = prepare_aff_layers(job, rendered_layers, on_progress)?;
+        let timing = parse_aff_timing_model(job);
+        let build = parse_aff_build_model(job);
+        let profile = aff_machine_profile_for_suffix(&build.key_suffix);
+        let (layers, payloads) = spool.ordered_parts()?;
+        let mut output = write_aff_container(job, &timing, &build, profile, layers,
+            payloads, BufWriter::new(File::create(output_path)?))?;
+        output.flush()?;
+        if let Some(progress) = on_progress {
+            let total = job.total_layers.saturating_mul(2);
+            progress(total, total);
+        }
+        Ok(())
+    }
+}
+
+fn prepare_aff_layers(
+    job: &SliceJobV3,
+    rendered_layers: &RenderedLayersV3,
+    on_progress: Option<&dyn Fn(u32, u32)>,
+) -> Result<LayerSpool, SlicerV3Error> {
+    let raw_masks = rendered_layers.raw_mask_layers.as_ref().filter(|layers| !layers.is_empty())
+        .ok_or_else(|| SlicerV3Error::MissingRenderedLayerPayload("raw mask layers are required for AFF encoding".to_string()))?;
+    let expected_pixels = job.source_width_px as usize * job.source_height_px as usize;
+    let timing = parse_aff_timing_model(job);
+    let build = parse_aff_build_model(job);
+    let pws = aff_rle_format_for_suffix(&build.key_suffix) == AffRleFormat::Pws;
+    let mut spool = LayerSpool::new(job.total_layers)?;
+    for (index, mask) in raw_masks.iter().enumerate() {
+        if mask.len() != expected_pixels {
+            return Err(SlicerV3Error::MissingRenderedLayerPayload(format!(
+                "AFF layer {index} size mismatch: expected {expected_pixels} bytes, got {}", mask.len())));
+        }
+        let non_zero = mask.iter().filter(|&&value| value > 0).count() as u32;
+        let encoded = if pws { encode_pws(mask, timing.anti_alias_level as u8) }
+            else { anycubic_pw0::encode_pw0(mask) };
+        spool.store(index, encoded, non_zero);
+        spool.check()?;
+        if let Some(progress) = on_progress {
+            progress((index as u32).saturating_mul(2).saturating_add(1), job.total_layers.saturating_mul(2));
+        }
+    }
+    Ok(spool)
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -219,11 +234,17 @@ fn choose_afz_queue_depth(worker_count: usize, bytes_per_mask: usize) -> usize {
     }
 }
 
+struct EncodedLayer {
+    index: usize,
+    encoded: Vec<u8>,
+    non_zero_pixel_count: u32,
+}
+
 /// PW0-encode a single raw mask layer.
-fn encode_single_afz_layer(index: usize, raw_mask: &[u8]) -> AfzPreparedLayer {
+fn encode_single_afz_layer(index: usize, raw_mask: &[u8]) -> EncodedLayer {
     let non_zero = raw_mask.iter().filter(|&&b| b > 0).count() as u32;
     let encoded = anycubic_pw0::encode_pw0(raw_mask);
-    AfzPreparedLayer {
+    EncodedLayer {
         index,
         encoded,
         non_zero_pixel_count: non_zero,
@@ -232,28 +253,15 @@ fn encode_single_afz_layer(index: usize, raw_mask: &[u8]) -> AfzPreparedLayer {
 
 /// PW0-encode an all-black empty layer without materializing a full-size zero mask.
 /// Used when the streaming pipeline sends a 0-byte sentinel for layers with no geometry.
-fn encode_single_afz_empty_layer(index: usize, pixel_count: usize) -> AfzPreparedLayer {
-    let encoded = anycubic_pw0::encode_pw0(&vec![0u8; pixel_count]);
-    AfzPreparedLayer {
+fn encode_single_afz_empty_layer(index: usize, pixel_count: usize) -> EncodedLayer {
+    let encoded = anycubic_pw0::encode_pw0_from_rle(&[], pixel_count);
+    EncodedLayer {
         index,
         encoded,
         non_zero_pixel_count: 0,
     }
 }
 
-/// PW0-encode a single rasterized RLE layer without expanding to a raw mask.
-fn encode_single_afz_rle_layer(
-    index: usize,
-    runs: &[crate::rle::RleRun],
-    pixel_count: usize,
-) -> AfzPreparedLayer {
-    let encoded = anycubic_pw0::encode_pw0_from_rle(runs, pixel_count);
-    AfzPreparedLayer {
-        index,
-        encoded,
-        non_zero_pixel_count: 0,
-    }
-}
 
 // ═══════════════════════════════════════════════════════════════════
 //  AZF streaming encoder (multi-threaded)
@@ -262,188 +270,116 @@ fn encode_single_afz_rle_layer(
 struct AzfStreamEncoder {
     job: SliceJobV3,
     work_tx: Option<crossbeam_channel::Sender<(u32, Vec<u8>)>>,
-    result_rx: mpsc::Receiver<Result<AfzPreparedLayer, SlicerV3Error>>,
+    result_rx: mpsc::Receiver<Result<EncodedLayer, SlicerV3Error>>,
     workers: Vec<thread::JoinHandle<()>>,
     consumed_layers: u32,
+    received_layers: u32,
+    spool: LayerSpool,
 }
 
 struct AzfRleStreamEncoder {
     job: SliceJobV3,
     total_pixels: usize,
-    prepared: Vec<AfzPreparedLayer>,
+    spool: LayerSpool,
     area_stats: Vec<LayerAreaStatsV3>,
 }
 
-impl RawMaskStreamEncoder for AzfStreamEncoder {
-    fn consume_raw_mask_layer(
-        &mut self,
-        layer_index: u32,
-        raw_mask: Vec<u8>,
-    ) -> Result<(), SlicerV3Error> {
-        let Some(ref tx) = self.work_tx else {
-            return Err(SlicerV3Error::MissingRenderedLayerPayload(
-                "AFZ streaming encoder no longer accepts layers after finalize".to_string(),
-            ));
-        };
+impl AzfStreamEncoder {
+    fn store_result(&mut self, result: Result<EncodedLayer, SlicerV3Error>) -> Result<(), SlicerV3Error> {
+        let layer = result?;
+        self.spool.store(layer.index, layer.encoded, layer.non_zero_pixel_count);
+        self.received_layers += 1;
+        self.spool.check()
+    }
 
-        tx.send((layer_index, raw_mask)).map_err(|_| {
-            SlicerV3Error::MissingRenderedLayerPayload(
-                "AFZ streaming worker channel closed unexpectedly".to_string(),
-            )
-        })?;
-        self.consumed_layers = self.consumed_layers.saturating_add(1);
+    fn finish_workers(&mut self) -> Result<(), SlicerV3Error> {
+        if self.consumed_layers == 0 {
+            return Err(SlicerV3Error::MissingRenderedLayerPayload("no rendered layers were provided for AFZ encoding".to_string()));
+        }
+        self.work_tx.take();
+        while let Some(worker) = self.workers.pop() {
+            worker.join().map_err(|_| SlicerV3Error::UnsupportedOutput("AFZ streaming worker panicked".to_string()))?;
+        }
+        while self.received_layers < self.consumed_layers {
+            let result = self.result_rx.recv().map_err(|_| SlicerV3Error::MissingRenderedLayerPayload("AFZ streaming worker results ended unexpectedly".to_string()))?;
+            self.store_result(result)?;
+        }
+        Ok(())
+    }
+}
+
+impl RawMaskStreamEncoder for AzfStreamEncoder {
+    fn consume_raw_mask_layer(&mut self, layer_index: u32, raw_mask: Vec<u8>) -> Result<(), SlicerV3Error> {
+        // Drain before accepting more work: only the bounded work queue and its
+        // workers can accumulate results, never the entire print job.
+        while let Ok(result) = self.result_rx.try_recv() {
+            self.store_result(result)?;
+        }
+        let producer = self.work_tx.as_ref().ok_or_else(|| SlicerV3Error::MissingRenderedLayerPayload("AFZ streaming encoder no longer accepts layers after finalize".to_string()))?;
+        producer.send((layer_index, raw_mask)).map_err(|_| SlicerV3Error::MissingRenderedLayerPayload("AFZ streaming worker channel closed unexpectedly".to_string()))?;
+        self.consumed_layers += 1;
         Ok(())
     }
 
     fn finalize_to_bytes(mut self: Box<Self>) -> Result<Vec<u8>, SlicerV3Error> {
-        if self.consumed_layers == 0 {
-            return Err(SlicerV3Error::MissingRenderedLayerPayload(
-                "no rendered layers were provided for AFZ encoding".to_string(),
-            ));
-        }
-
-        // Close producer channel and let workers drain.
-        let _ = self.work_tx.take();
-
-        while let Some(handle) = self.workers.pop() {
-            if handle.join().is_err() {
-                return Err(SlicerV3Error::UnsupportedOutput(
-                    "AFZ streaming worker panicked".to_string(),
-                ));
-            }
-        }
-
-        // Collect results in layer order.
-        let expected = self.consumed_layers as usize;
-        let mut ordered: Vec<Option<AfzPreparedLayer>> = Vec::with_capacity(expected);
-        ordered.resize_with(expected, || None);
-
-        for _ in 0..expected {
-            let msg = self.result_rx.recv().map_err(|_| {
-                SlicerV3Error::MissingRenderedLayerPayload(
-                    "AFZ streaming worker results ended unexpectedly".to_string(),
-                )
-            })?;
-
-            let prepared = msg?;
-            let index = prepared.index;
-            if index >= expected {
-                return Err(SlicerV3Error::MissingRenderedLayerPayload(format!(
-                    "AFZ worker emitted out-of-range layer index {} (expected < {})",
-                    index, expected
-                )));
-            }
-            if ordered[index].is_some() {
-                return Err(SlicerV3Error::MissingRenderedLayerPayload(format!(
-                    "AFZ worker emitted duplicate layer index {}",
-                    index
-                )));
-            }
-            ordered[index] = Some(prepared);
-        }
-
-        let mut prepared = Vec::with_capacity(expected);
-        for (i, slot) in ordered.into_iter().enumerate() {
-            let Some(layer) = slot else {
-                return Err(SlicerV3Error::MissingRenderedLayerPayload(format!(
-                    "AFZ layer {} missing from streaming worker output",
-                    i
-                )));
-            };
-            prepared.push(layer);
-        }
-
+        self.finish_workers()?;
         let timing = parse_afz_timing_model(&self.job);
         let build = parse_afz_build_model(&self.job);
         let profile = machine_profile_for_suffix(&build.key_suffix);
-
-        let fallback_stats = prepared
-            .iter()
-            .map(|layer| LayerAreaStatsV3 {
-                total_solid_pixels: layer.non_zero_pixel_count,
-                ..LayerAreaStatsV3::default()
-            })
-            .collect::<Vec<_>>();
-
-        build_afz_container(
-            &self.job,
-            &timing,
-            &build,
-            profile,
-            &prepared,
-            &fallback_stats,
-            None,
-        )
+        let (layers, payloads) = self.spool.ordered_parts()?;
+        build_afz_container(&self.job, &timing, &build, profile, layers, &[], payloads, None)
     }
 
-    fn finalize_to_path(self: Box<Self>, output_path: &Path) -> Result<(), SlicerV3Error> {
-        let bytes = self.finalize_to_bytes()?;
-        std::fs::write(output_path, bytes)?;
+    fn finalize_to_path(mut self: Box<Self>, output_path: &Path) -> Result<(), SlicerV3Error> {
+        self.finish_workers()?;
+        let timing = parse_afz_timing_model(&self.job);
+        let build = parse_afz_build_model(&self.job);
+        let profile = machine_profile_for_suffix(&build.key_suffix);
+        let (layers, payloads) = self.spool.ordered_parts()?;
+        let mut output = write_afz_container(&self.job, &timing, &build, profile,
+            layers, &[], payloads, BufWriter::new(File::create(output_path)?), None)?;
+        output.flush()?;
         Ok(())
     }
 }
 
 impl RleStreamEncoder for AzfRleStreamEncoder {
-    fn consume_rle_layer(
-        &mut self,
-        layer_index: u32,
-        runs: Vec<crate::rle::RleRun>,
-    ) -> Result<(), SlicerV3Error> {
-        self.prepared.push(encode_single_afz_rle_layer(
-            layer_index as usize,
-            &runs,
-            self.total_pixels,
-        ));
-        Ok(())
+    fn consume_rle_layer(&mut self, layer_index: u32, runs: Vec<crate::rle::RleRun>) -> Result<(), SlicerV3Error> {
+        let encoded = anycubic_pw0::encode_pw0_from_rle(&runs, self.total_pixels);
+        self.spool.store(layer_index as usize, encoded, 0);
+        self.spool.check()
     }
 
     fn set_area_stats(&mut self, stats: Vec<LayerAreaStatsV3>) {
         self.area_stats = stats;
     }
 
-    fn parallel_encode_fn(
-        &self,
-    ) -> Option<
-        Arc<dyn Fn(u32, &[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync>,
-    > {
+    fn parallel_encode_fn(&self) -> Option<Arc<dyn Fn(u32, &[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync>> {
         let total_pixels = self.total_pixels;
-        Some(Arc::new(
-            move |_layer_index: u32, runs: &[crate::rle::RleRun]| {
-                Ok(anycubic_pw0::encode_pw0_from_rle(runs, total_pixels))
-            },
-        ))
+        Some(Arc::new(move |_index, runs| Ok(anycubic_pw0::encode_pw0_from_rle(runs, total_pixels))))
     }
 
     fn store_encoded_layer(&mut self, layer_index: u32, bytes: Vec<u8>) {
-        self.prepared.push(AfzPreparedLayer {
-            index: layer_index as usize,
-            encoded: bytes,
-            non_zero_pixel_count: 0,
-        });
+        self.spool.store(layer_index as usize, bytes, 0);
     }
 
     fn finalize_to_bytes(mut self: Box<Self>) -> Result<Vec<u8>, SlicerV3Error> {
-        if self.prepared.is_empty() {
-            return Err(SlicerV3Error::MissingRenderedLayerPayload(
-                "no rendered layers were provided for AFZ RLE encoding".to_string(),
-            ));
-        }
-
-        self.prepared.sort_unstable_by_key(|layer| layer.index);
-
         let timing = parse_afz_timing_model(&self.job);
         let build = parse_afz_build_model(&self.job);
         let profile = machine_profile_for_suffix(&build.key_suffix);
+        let (layers, payloads) = self.spool.ordered_parts()?;
+        build_afz_container(&self.job, &timing, &build, profile, layers, &self.area_stats, payloads, None)
+    }
 
-        build_afz_container(
-            &self.job,
-            &timing,
-            &build,
-            profile,
-            &self.prepared,
-            &self.area_stats,
-            None,
-        )
+    fn finalize_to_path(mut self: Box<Self>, output_path: &Path) -> Result<(), SlicerV3Error> {
+        let timing = parse_afz_timing_model(&self.job);
+        let build = parse_afz_build_model(&self.job);
+        let profile = machine_profile_for_suffix(&build.key_suffix);
+        let (layers, payloads) = self.spool.ordered_parts()?;
+        let mut output = write_afz_container(&self.job, &timing, &build, profile,
+            layers, &self.area_stats, payloads, BufWriter::new(File::create(output_path)?), None)?;
+        output.flush()?;
+        Ok(())
     }
 }
 
@@ -475,7 +411,7 @@ impl FormatEncoder for AzfPluginEncoder {
             cap_afz_workers_for_mask_bytes(choose_afz_encode_threads(), expected_pixels);
         let queue_depth = choose_afz_queue_depth(worker_count, expected_pixels);
         let (work_tx, work_rx) = bounded::<(u32, Vec<u8>)>(queue_depth);
-        let (result_tx, result_rx) = mpsc::channel::<Result<AfzPreparedLayer, SlicerV3Error>>();
+        let (result_tx, result_rx) = mpsc::channel::<Result<EncodedLayer, SlicerV3Error>>();
         let mut workers = Vec::with_capacity(worker_count);
 
         for _ in 0..worker_count {
@@ -533,6 +469,8 @@ impl FormatEncoder for AzfPluginEncoder {
             result_rx,
             workers,
             consumed_layers: 0,
+            received_layers: 0,
+            spool: LayerSpool::new(job.total_layers)?,
         })))
     }
 
@@ -545,57 +483,16 @@ impl FormatEncoder for AzfPluginEncoder {
         Ok(Some(Box::new(AzfRleStreamEncoder {
             job: job.clone(),
             total_pixels,
-            prepared: Vec::with_capacity(job.total_layers as usize),
+            spool: LayerSpool::new(job.total_layers)?,
             area_stats: vec![LayerAreaStatsV3::default(); job.total_layers as usize],
         })))
     }
 
     fn encode_container_from_rendered_layers(
-        &self,
-        job: &SliceJobV3,
-        rendered_layers: &RenderedLayersV3,
+        &self, job: &SliceJobV3, rendered_layers: &RenderedLayersV3,
         layer_area_stats: &[LayerAreaStatsV3],
     ) -> Result<Vec<u8>, SlicerV3Error> {
-        let Some(raw_masks) = rendered_layers.raw_mask_layers.as_ref() else {
-            return Err(SlicerV3Error::MissingRenderedLayerPayload(
-                "raw mask layers are required for AFZ encoding".to_string(),
-            ));
-        };
-
-        if raw_masks.is_empty() {
-            return Err(SlicerV3Error::MissingRenderedLayerPayload(
-                "no rendered layers were provided for AFZ encoding".to_string(),
-            ));
-        }
-
-        let expected_pixels =
-            (job.source_width_px as usize).saturating_mul(job.source_height_px as usize);
-        for (idx, layer) in raw_masks.iter().enumerate() {
-            if layer.len() != expected_pixels {
-                return Err(SlicerV3Error::MissingRenderedLayerPayload(format!(
-                    "AFZ layer {idx} size mismatch: expected {expected_pixels} bytes, got {}",
-                    layer.len()
-                )));
-            }
-        }
-
-        let prepared: Vec<AfzPreparedLayer> = raw_masks
-            .iter()
-            .enumerate()
-            .map(|(i, mask)| {
-                let layer = encode_single_afz_layer(i, mask);
-                if layer.encoded.is_empty() {
-                    // non-fatal for empty layers but worth noting
-                }
-                layer
-            })
-            .collect();
-
-        let timing = parse_afz_timing_model(job);
-        let build = parse_afz_build_model(job);
-        let profile = machine_profile_for_suffix(&build.key_suffix);
-
-        build_afz_container(job, &timing, &build, profile, &prepared, layer_area_stats, None)
+        self.encode_container_from_rendered_layers_with_progress(job, rendered_layers, layer_area_stats, None)
     }
 
     fn estimate_encode_progress_units(&self, rendered_layers: &RenderedLayersV3) -> u32 {
@@ -603,71 +500,46 @@ impl FormatEncoder for AzfPluginEncoder {
     }
 
     fn encode_container_from_rendered_layers_with_progress(
-        &self,
-        job: &SliceJobV3,
-        rendered_layers: &RenderedLayersV3,
-        layer_area_stats: &[LayerAreaStatsV3],
-        on_progress: Option<&dyn Fn(u32, u32)>,
+        &self, job: &SliceJobV3, rendered_layers: &RenderedLayersV3,
+        layer_area_stats: &[LayerAreaStatsV3], on_progress: Option<&dyn Fn(u32, u32)>,
     ) -> Result<Vec<u8>, SlicerV3Error> {
-        let report = |done, total| {
-            if let Some(cb) = on_progress {
-                cb(done, total);
-            }
-        };
-        let Some(raw_masks) = rendered_layers.raw_mask_layers.as_ref() else {
-            return Err(SlicerV3Error::MissingRenderedLayerPayload(
-                "raw mask layers are required for AFZ encoding".to_string(),
-            ));
-        };
-        if raw_masks.is_empty() {
-            return Err(SlicerV3Error::MissingRenderedLayerPayload(
-                "no rendered layers were provided for AFZ encoding".to_string(),
-            ));
-        }
-
-        let expected_pixels =
-            (job.source_width_px as usize).saturating_mul(job.source_height_px as usize);
-        let total_layers = raw_masks.len();
-        let total_units = job.total_layers.saturating_mul(2);
-        let mut prepared = Vec::with_capacity(total_layers);
-
-        for (i, mask) in raw_masks.iter().enumerate() {
-            if mask.len() != expected_pixels {
-                return Err(SlicerV3Error::MissingRenderedLayerPayload(format!(
-                    "AFZ layer {i} size mismatch: expected {expected_pixels} bytes, got {}",
-                    mask.len()
-                )));
-            }
-            let layer = encode_single_afz_layer(i, mask);
-            if layer.encoded.is_empty() && layer.non_zero_pixel_count > 0 {
-                return Err(SlicerV3Error::MissingRenderedLayerPayload(format!(
-                    "AFZ layer {i} encoded to zero bytes with {nz} non-zero pixels",
-                    nz = layer.non_zero_pixel_count
-                )));
-            }
-            prepared.push(layer);
-            report((i as u32).saturating_mul(2).saturating_add(1), total_units);
-        }
-
+        let mut spool = prepare_afz_layers(job, rendered_layers, on_progress)?;
         let timing = parse_afz_timing_model(job);
         let build = parse_afz_build_model(job);
         let profile = machine_profile_for_suffix(&build.key_suffix);
-
-        let result = build_afz_container(job, &timing, &build, profile, &prepared, layer_area_stats, None)?;
-        report(total_units, total_units);
-        Ok(result)
+        let (layers, payloads) = spool.ordered_parts()?;
+        let bytes = build_afz_container(job, &timing, &build, profile, layers, layer_area_stats, payloads, None)?;
+        if let Some(progress) = on_progress {
+            let total = job.total_layers.saturating_mul(2);
+            progress(total, total);
+        }
+        Ok(bytes)
     }
 
     fn encode_container_to_path(
-        &self,
-        job: &SliceJobV3,
-        rendered_layers: &RenderedLayersV3,
-        layer_area_stats: &[LayerAreaStatsV3],
-        output_path: &Path,
+        &self, job: &SliceJobV3, rendered_layers: &RenderedLayersV3,
+        layer_area_stats: &[LayerAreaStatsV3], output_path: &Path,
     ) -> Result<(), SlicerV3Error> {
-        let bytes =
-            self.encode_container_from_rendered_layers(job, rendered_layers, layer_area_stats)?;
-        std::fs::write(output_path, bytes)?;
+        self.encode_container_to_path_with_progress(job, rendered_layers, layer_area_stats, output_path, None)
+    }
+
+    fn encode_container_to_path_with_progress(
+        &self, job: &SliceJobV3, rendered_layers: &RenderedLayersV3,
+        layer_area_stats: &[LayerAreaStatsV3], output_path: &Path,
+        on_progress: Option<&dyn Fn(u32, u32)>,
+    ) -> Result<(), SlicerV3Error> {
+        let mut spool = prepare_afz_layers(job, rendered_layers, on_progress)?;
+        let timing = parse_afz_timing_model(job);
+        let build = parse_afz_build_model(job);
+        let profile = machine_profile_for_suffix(&build.key_suffix);
+        let (layers, payloads) = spool.ordered_parts()?;
+        let mut output = write_afz_container(job, &timing, &build, profile, layers,
+            layer_area_stats, payloads, BufWriter::new(File::create(output_path)?), None)?;
+        output.flush()?;
+        if let Some(progress) = on_progress {
+            let total = job.total_layers.saturating_mul(2);
+            progress(total, total);
+        }
         Ok(())
     }
 
@@ -680,12 +552,35 @@ impl FormatEncoder for AzfPluginEncoder {
     }
 }
 
+fn prepare_afz_layers(
+    job: &SliceJobV3, rendered_layers: &RenderedLayersV3,
+    on_progress: Option<&dyn Fn(u32, u32)>,
+) -> Result<LayerSpool, SlicerV3Error> {
+    let raw_masks = rendered_layers.raw_mask_layers.as_ref().filter(|layers| !layers.is_empty())
+        .ok_or_else(|| SlicerV3Error::MissingRenderedLayerPayload("raw mask layers are required for AFZ encoding".to_string()))?;
+    let expected_pixels = job.source_width_px as usize * job.source_height_px as usize;
+    let mut spool = LayerSpool::new(job.total_layers)?;
+    for (index, mask) in raw_masks.iter().enumerate() {
+        if mask.len() != expected_pixels {
+            return Err(SlicerV3Error::MissingRenderedLayerPayload(format!(
+                "AFZ layer {index} size mismatch: expected {expected_pixels} bytes, got {}", mask.len())));
+        }
+        let layer = encode_single_afz_layer(index, mask);
+        spool.store(index, layer.encoded, layer.non_zero_pixel_count);
+        spool.check()?;
+        if let Some(progress) = on_progress {
+            progress((index as u32).saturating_mul(2).saturating_add(1), job.total_layers.saturating_mul(2));
+        }
+    }
+    Ok(spool)
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  AFF (Anycubic File Format) encoders
 // ═══════════════════════════════════════════════════════════════════
 
 use aff_codec::{aff_rle_format_for_suffix, encode_pw0_from_rle, encode_pws, AffRleFormat};
-use aff_layout::{build_aff_container, AffPreparedLayer};
+use aff_layout::{build_aff_container, write_aff_container};
 use aff_metadata::{
     machine_profile_for_suffix as aff_machine_profile_for_suffix,
     parse_aff_build_model,
@@ -697,7 +592,7 @@ struct AffRleStreamEncoder {
     total_pixels: usize,
     /// `Some(aa_level)` for PWS, `None` for PW0.
     pws_aa_level: Option<u8>,
-    prepared: Vec<AffPreparedLayer>,
+    spool: LayerSpool,
 }
 
 impl RleStreamEncoder for AffRleStreamEncoder {
@@ -712,14 +607,14 @@ impl RleStreamEncoder for AffRleStreamEncoder {
                 &crate::rle::expand_rle_to_mask(&runs, self.total_pixels),
                 aa_level,
             ),
-            None => AffPreparedLayer {
+            None => EncodedLayer {
                 index: layer_index as usize,
                 encoded: encode_pw0_from_rle(&runs, self.total_pixels),
                 non_zero_pixel_count: 0, // backfilled via set_area_stats
             },
         };
-        self.prepared.push(prepared);
-        Ok(())
+        self.spool.store(prepared.index, prepared.encoded, prepared.non_zero_pixel_count);
+        self.spool.check()
     }
 
     fn set_area_stats(&mut self, stats: Vec<LayerAreaStatsV3>) {
@@ -728,7 +623,7 @@ impl RleStreamEncoder for AffRleStreamEncoder {
         if self.pws_aa_level.is_some() {
             return;
         }
-        for layer in &mut self.prepared {
+        for layer in self.spool.layers_mut() {
             if let Some(s) = stats.get(layer.index) {
                 layer.non_zero_pixel_count = s.total_solid_pixels;
             }
@@ -748,33 +643,33 @@ impl RleStreamEncoder for AffRleStreamEncoder {
     }
 
     fn store_encoded_layer(&mut self, layer_index: u32, bytes: Vec<u8>) {
-        self.prepared.push(AffPreparedLayer {
-            index: layer_index as usize,
-            encoded: bytes,
-            non_zero_pixel_count: 0,
-        });
+        self.spool.store(layer_index as usize, bytes, 0);
     }
 
     fn finalize_to_bytes(mut self: Box<Self>) -> Result<Vec<u8>, SlicerV3Error> {
-        if self.prepared.is_empty() {
-            return Err(SlicerV3Error::MissingRenderedLayerPayload(
-                "no rendered layers were provided for AFF encoding".to_string(),
-            ));
-        }
-        self.prepared.sort_unstable_by_key(|l| l.index);
-
         let timing = parse_aff_timing_model(&self.job);
         let build = parse_aff_build_model(&self.job);
         let profile = aff_machine_profile_for_suffix(&build.key_suffix);
+        let (layers, payloads) = self.spool.ordered_parts()?;
+        build_aff_container(&self.job, &timing, &build, profile, layers, payloads)
+    }
 
-        build_aff_container(&self.job, &timing, &build, profile, &self.prepared)
+    fn finalize_to_path(mut self: Box<Self>, output_path: &Path) -> Result<(), SlicerV3Error> {
+        let timing = parse_aff_timing_model(&self.job);
+        let build = parse_aff_build_model(&self.job);
+        let profile = aff_machine_profile_for_suffix(&build.key_suffix);
+        let (layers, payloads) = self.spool.ordered_parts()?;
+        let mut output = write_aff_container(&self.job, &timing, &build, profile, layers,
+            payloads, BufWriter::new(File::create(output_path)?))?;
+        output.flush()?;
+        Ok(())
     }
 }
 
-fn encode_single_aff_pws_layer(index: usize, raw_mask: &[u8], aa_level: u8) -> AffPreparedLayer {
+fn encode_single_aff_pws_layer(index: usize, raw_mask: &[u8], aa_level: u8) -> EncodedLayer {
     let non_zero = raw_mask.iter().filter(|&&b| b > 0).count() as u32;
     let encoded = encode_pws(raw_mask, aa_level);
-    AffPreparedLayer { index, encoded, non_zero_pixel_count: non_zero }
+    EncodedLayer { index, encoded, non_zero_pixel_count: non_zero }
 }
 
 /// Reads a single layer preview PNG from an AFZ (Anycubic Zip Format) file.
@@ -893,63 +788,6 @@ mod tests {
         }
     }
 
-    fn make_rendered_layers(count: usize, pixels: usize) -> RenderedLayersV3 {
-        let mask = vec![128u8; pixels];
-        RenderedLayersV3 {
-            raw_mask_layers: Some(vec![mask; count]),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn aff_encoder_output_format() {
-        assert_eq!(AffPluginEncoder.output_format(), ".aff");
-    }
-
-    #[test]
-    fn azf_encoder_output_format() {
-        assert_eq!(AzfPluginEncoder.output_format(), ".azf");
-    }
-
-    #[test]
-    fn aff_encoder_requires_raw_mask_not_png() {
-        assert!(AffPluginEncoder.requires_raw_mask_layers());
-        assert!(!AffPluginEncoder.requires_png_layers());
-    }
-
-    #[test]
-    fn azf_encoder_requires_raw_mask_not_png() {
-        assert!(AzfPluginEncoder.requires_raw_mask_layers());
-        assert!(!AzfPluginEncoder.requires_png_layers());
-    }
-
-    #[test]
-    fn estimate_progress_units_returns_layers_times_two() {
-        let rendered = make_rendered_layers(10, 256);
-        assert_eq!(AffPluginEncoder.estimate_encode_progress_units(&rendered), 20);
-        assert_eq!(AzfPluginEncoder.estimate_encode_progress_units(&rendered), 20);
-    }
-
-    #[test]
-    fn estimate_progress_units_zero_for_empty_layers() {
-        let rendered = RenderedLayersV3 {
-            raw_mask_layers: None,
-            ..Default::default()
-        };
-        assert_eq!(AffPluginEncoder.estimate_encode_progress_units(&rendered), 0);
-        assert_eq!(AzfPluginEncoder.estimate_encode_progress_units(&rendered), 0);
-    }
-
-    #[test]
-    fn aff_rle_encoder_accepts_pw0_and_pws() {
-        // Default suffix "pwmo" → PW0.
-        let job = make_job(".aff", 1);
-        assert!(AffPluginEncoder.create_rle_stream_encoder(&job).unwrap().is_some());
-
-        let mut pws = make_job(".aff", 1);
-        pws.format_version = Some("pws".to_string());
-        assert!(AffPluginEncoder.create_rle_stream_encoder(&pws).unwrap().is_some());
-    }
 
     /// Runs of a mask, as the rasterizer streams them.
     fn mask_to_runs(mask: &[u8]) -> Vec<crate::rle::RleRun> {
@@ -992,13 +830,41 @@ mod tests {
     }
 
     #[test]
-    fn azf_creates_both_streaming_encoders() {
-        let job = make_job(".azf", 1);
-        let rle = AzfPluginEncoder.create_rle_stream_encoder(&job).unwrap();
-        let raw = AzfPluginEncoder.create_raw_mask_stream_encoder(&job).unwrap();
-        assert!(rle.is_some());
-        assert!(raw.is_some());
+    fn azf_parallel_results_preserve_layer_identity() {
+        use std::io::Read;
+        let job = make_job(".azf", 2);
+        let mut stream = AzfPluginEncoder.create_rle_stream_encoder(&job).unwrap().unwrap();
+        let encode = stream.parallel_encode_fn().unwrap();
+        stream.store_encoded_layer(1, encode(1, &[crate::rle::RleRun { length: 256, value: 255 }]).unwrap());
+        stream.store_encoded_layer(0, encode(0, &[]).unwrap());
+        let bytes = stream.finalize_to_bytes().unwrap();
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        for (index, value) in [(0, 0), (1, 255)] {
+            let mut encoded = Vec::new();
+            archive.by_name(&format!("layer_images/layer_{index}.pw0Img")).unwrap()
+                .read_to_end(&mut encoded).unwrap();
+            assert_eq!(anycubic_pw0::decode_pw0(&encoded, 256), vec![value; 256]);
+        }
     }
+
+    #[test]
+    fn azf_raw_workers_preserve_layers_across_result_drains() {
+        use std::io::Read;
+        let job = make_job(".azf", 128);
+        let mut stream = AzfPluginEncoder.create_raw_mask_stream_encoder(&job).unwrap().unwrap();
+        for index in 0..128 {
+            stream.consume_raw_mask_layer(index, vec![if index % 2 == 0 { 0 } else { 255 }; 256]).unwrap();
+        }
+        let bytes = stream.finalize_to_bytes().unwrap();
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        for index in 0..128 {
+            let mut encoded = Vec::new();
+            archive.by_name(&format!("layer_images/layer_{index}.pw0Img")).unwrap()
+                .read_to_end(&mut encoded).unwrap();
+            assert_eq!(anycubic_pw0::decode_pw0(&encoded, 256), vec![if index % 2 == 0 { 0 } else { 255 }; 256]);
+        }
+    }
+
 
     #[test]
     fn encode_empty_layers_rejected() {
