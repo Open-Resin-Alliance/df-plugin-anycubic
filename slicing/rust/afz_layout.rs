@@ -11,6 +11,7 @@
 //! - `layer_images/layer_N.pw0Img` — PW0 RLE encoded layer images
 
 use crate::engine::SlicerV3Error;
+use crate::layer_settings::LayerSettingsSchedule;
 use crate::types::{LayerAreaStatsV3, SliceJobV3};
 
 use super::afz_metadata::{AfzBuildModel, AfzMachineProfile, AfzTimingModel};
@@ -38,6 +39,7 @@ const SCENE_LAYER_DEF_PADDING_U32S: usize = 8;
 /// Build the complete AFZ ZIP container as an in-memory byte vector.
 pub(super) fn build_afz_container(
     job: &SliceJobV3,
+    schedule: &LayerSettingsSchedule,
     timing: &AfzTimingModel,
     build: &AfzBuildModel,
     profile: &AfzMachineProfile,
@@ -48,6 +50,7 @@ pub(super) fn build_afz_container(
 ) -> Result<Vec<u8>, SlicerV3Error> {
     write_afz_container(
         job,
+        schedule,
         timing,
         build,
         profile,
@@ -63,6 +66,7 @@ pub(super) fn build_afz_container(
 /// Write an AFZ ZIP directly to the output, reading indexed payload extents from scratch.
 pub(super) fn write_afz_container<W: Write + Seek>(
     job: &SliceJobV3,
+    schedule: &LayerSettingsSchedule,
     timing: &AfzTimingModel,
     build: &AfzBuildModel,
     profile: &AfzMachineProfile,
@@ -104,7 +108,7 @@ pub(super) fn write_afz_container<W: Write + Seek>(
 
     // ── Entry order matches Anycubic Photon Workshop ──────────────
     // 1. Settings
-    let settings_json = build_settings_json(job, timing, build, profile);
+    let settings_json = build_settings_json(job, schedule, timing, build, profile);
     zip.start_file(SETTINGS_FILE, options)?;
     zip.write_all(settings_json.as_bytes())?;
 
@@ -127,7 +131,7 @@ pub(super) fn write_afz_container<W: Write + Seek>(
     zip.write_all(&preview_3)?;
 
     // 5. Layers controller
-    let layers_json = build_layers_controller_json(timing, layers);
+    let layers_json = build_layers_controller_json(timing, layers, schedule);
     zip.start_file(LAYERS_FILE, options)?;
     zip.write_all(layers_json.as_bytes())?;
 
@@ -186,6 +190,7 @@ fn jf(v: f32) -> String {
 
 fn build_settings_json(
     job: &SliceJobV3,
+    schedule: &LayerSettingsSchedule,
     timing: &AfzTimingModel,
     build: &AfzBuildModel,
     profile: &AfzMachineProfile,
@@ -298,7 +303,7 @@ fn build_settings_json(
         "exposure_time": {normal_exposure},
         "gray_level": 0,
         "off_time": {wait_time},
-        "use_indivi_layerpara": 0,
+        "use_indivi_layerpara": {per_layer_settings},
         "use_random_erode": 0,
         "zthick": {layer_height},
         "zup_height": {total_lift},
@@ -389,6 +394,7 @@ fn build_settings_json(
         resin_volume = jf(build.resin_volume_ml),
         resin_density = jf(build.resin_density),
         target_temperature = jf(build.target_temperature),
+        per_layer_settings = if schedule.is_empty() { 0 } else { 1 },
         intelli_mode = if build.intelligent_release { 2 } else { 0 },
         transition_layers = timing.transition_layer_count,
         bottom_layers = timing.bottom_layer_count,
@@ -405,7 +411,9 @@ fn build_settings_json(
     )
 }
 
-fn build_layers_controller_json(timing: &AfzTimingModel, layers: &[StoredLayer]) -> String {
+fn build_layers_controller_json(
+    timing: &AfzTimingModel, layers: &[StoredLayer], schedule: &LayerSettingsSchedule,
+) -> String {
     let mut entries = Vec::with_capacity(layers.len());
     let mut min_height: f32 = 0.0;
 
@@ -439,6 +447,12 @@ fn build_layers_controller_json(timing: &AfzTimingModel, layers: &[StoredLayer])
         } else {
             timing.lift_speed_mm_s
         };
+
+        let patch = schedule.patch_at(layer_idx);
+        let exposure = patch.and_then(|p| p.exposure_sec).map(|v| v as f32).unwrap_or(exposure);
+        // Legacy controller heights are stage 1, not the global two-stage total.
+        let lift_height = patch.and_then(|p| p.lift_height_mm).map(|v| v as f32).unwrap_or(lift_height);
+        let lift_speed = patch.and_then(|p| p.lift_speed_mm_min).map(|v| (v / 60.0) as f32).unwrap_or(lift_speed);
 
         entries.push(format!(
             r#"    {{
@@ -826,6 +840,77 @@ mod tests {
         }
     }
 
+
+    fn manifest(entries: &[(String, Vec<u8>)], name: &str) -> serde_json::Value {
+        serde_json::from_slice(&entries.iter().find(|(n, _)| n == name).unwrap().1).unwrap()
+    }
+
+    #[test]
+    fn layer_settings_ranges_all_azf_variants_preserve_legacy_baselines() {
+        use super::super::{AzfPluginEncoder, tests::{range_job, range_artifact, range_artifacts}};
+        let expected = [10.0, 10.0, 4.0, 4.0, 7.0, 9.0, 9.0, 4.0, 4.0, 4.0, 2.0, 2.0];
+        for variant in ["pm4u", "pm7", "pm7m", "pwsz", "pp1", "pp1m"] {
+            let job = range_job(".azf", variant);
+            let artifacts = range_artifacts(&AzfPluginEncoder, &job);
+            let entries = read_entries(Cursor::new(&artifacts[0]));
+            for artifact in &artifacts[1..] { assert_eq!(entries, read_entries(Cursor::new(artifact)), "{variant} public finalizer parity"); }
+            let settings = manifest(&entries, SETTINGS_FILE);
+            assert_eq!(settings["machine_extern"]["user_resins"][0]["slicepara"]["use_indivi_layerpara"], 1);
+            let controller = manifest(&entries, LAYERS_FILE);
+            assert_eq!(controller["count"], 12);
+            let mut plain = job.clone();
+            let mut meta: serde_json::Value = serde_json::from_str(&plain.metadata_json).unwrap();
+            meta.as_object_mut().unwrap().remove("layerSettingsRanges");
+            plain.metadata_json = meta.to_string();
+            let baseline = read_entries(Cursor::new(range_artifact(&AzfPluginEncoder, &plain)));
+            let baseline_controller = manifest(&baseline, LAYERS_FILE);
+            let baseline_settings = manifest(&baseline, SETTINGS_FILE);
+            assert_eq!(baseline_settings["machine_extern"]["user_resins"][0]["slicepara"]["use_indivi_layerpara"], 0);
+            let mut activated_settings = baseline_settings.clone();
+            activated_settings["machine_extern"]["user_resins"][0]["slicepara"]["use_indivi_layerpara"] = serde_json::json!(1);
+            assert_eq!(settings, activated_settings, "{variant} global settings remain unchanged");
+            for (i, exposure) in expected.iter().enumerate() {
+                let para = &controller["paras"][i];
+                assert_eq!(para["exposure_time"].as_f64().unwrap(), *exposure, "{variant} layer {}", i + 1);
+                assert_eq!(para["layer_index"], i);
+                assert_eq!(para["layer_thickness"], baseline_controller["paras"][i]["layer_thickness"]);
+                assert_eq!(para["layer_minheight"], baseline_controller["paras"][i]["layer_minheight"]);
+                assert_eq!(para["zup_height"].as_f64().unwrap(), if (2..10).contains(&i) { 8.0 } else if i < 2 { 3.125 } else { 4.375 });
+                if (2..10).contains(&i) {
+                    assert_eq!(para["zup_speed"].as_f64().unwrap(), 2.0);
+                } else {
+                    assert_eq!(para["zup_speed"], baseline_controller["paras"][i]["zup_speed"]);
+                }
+            }
+            for (name, payload) in &entries {
+                if name.starts_with("layer_images/") { assert_eq!(payload, &baseline.iter().find(|(n, _)| n == name).unwrap().1); }
+            }
+            meta["layerSettingsRanges"] = serde_json::json!([]);
+            plain.metadata_json = meta.to_string();
+            assert_eq!(baseline, read_entries(Cursor::new(range_artifact(&AzfPluginEncoder, &plain))), "{variant} absent/empty parity");
+            meta["layerSettingsRanges"] = serde_json::json!([{"id":"later","startLayer":20,"endLayer":30,"settings":{"exposureSec":0}}]);
+            plain.metadata_json = meta.to_string();
+            let beyond = read_entries(Cursor::new(range_artifact(&AzfPluginEncoder, &plain)));
+            assert_eq!(manifest(&beyond, LAYERS_FILE), baseline_controller);
+            assert_eq!(manifest(&beyond, SETTINGS_FILE), activated_settings);
+            // Exposure/speed-only patches must retain first-stage legacy heights,
+            // including bottom layers, uncovered transitions and nonzero stage 2.
+            meta["layerSettingsRanges"] = serde_json::json!([
+                {"id":"exposure","startLayer":1,"endLayer":1,"settings":{"exposureSec":0}},
+                {"id":"speed","startLayer":4,"endLayer":4,"settings":{"liftSpeedMmMin":120}}
+            ]);
+            plain.metadata_json = meta.to_string();
+            let sparse = read_entries(Cursor::new(range_artifact(&AzfPluginEncoder, &plain)));
+            let sparse_controller = manifest(&sparse, LAYERS_FILE);
+            for i in 0..12 {
+                assert_eq!(sparse_controller["paras"][i]["zup_height"], baseline_controller["paras"][i]["zup_height"]);
+                if i != 0 && i != 3 { assert_eq!(sparse_controller["paras"][i], baseline_controller["paras"][i]); }
+            }
+            assert_eq!(sparse_controller["paras"][0]["exposure_time"], 0.0);
+            assert_eq!(sparse_controller["paras"][3]["zup_speed"], 2.0);
+        }
+    }
+
     #[test]
     fn scene_binary_has_correct_magic_and_markers() {
         let job = make_test_job();
@@ -880,12 +965,12 @@ mod tests {
         ];
         let profile = super::super::afz_metadata::machine_profile_for_suffix(&build.key_suffix);
         let bytes = build_afz_container(
-            &job, &timing, &build, profile, &layers, &[], payloads.file(), None,
+            &job, &LayerSettingsSchedule::from_job(&job, super::super::LAYER_SETTINGS_FIELDS).unwrap(), &timing, &build, profile, &layers, &[], payloads.file(), None,
         )
         .expect("build bytes");
         let mut output = ScratchFile::new(&[]);
         write_afz_container(
-            &job, &timing, &build, profile, &layers, &[], payloads.file(), output.file(), None,
+            &job, &LayerSettingsSchedule::from_job(&job, super::super::LAYER_SETTINGS_FIELDS).unwrap(), &timing, &build, profile, &layers, &[], payloads.file(), output.file(), None,
         )
         .expect("write archive file");
         output.file().rewind().expect("rewind archive");
@@ -932,6 +1017,7 @@ mod tests {
         }];
         let error = write_afz_container(
             &job,
+            &LayerSettingsSchedule::from_job(&job, super::super::LAYER_SETTINGS_FIELDS).unwrap(),
             &timing,
             &build,
             profile,

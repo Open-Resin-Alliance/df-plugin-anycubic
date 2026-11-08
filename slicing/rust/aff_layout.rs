@@ -11,6 +11,7 @@ use std::fs::File;
 use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 
 use super::layer_spool::StoredLayer;
+use crate::layer_settings::LayerSettingsSchedule;
 
 // ── Primitive writers ───────────────────────────────────────────────
 
@@ -713,13 +714,14 @@ use crate::types::SliceJobV3;
 
 pub(super) fn build_aff_container(
     job: &SliceJobV3,
+    schedule: &LayerSettingsSchedule,
     timing: &AffTimingModel,
     build: &AffBuildModel,
     profile: &AffMachineProfile,
     layers: &[StoredLayer],
     payloads: &mut File,
 ) -> Result<Vec<u8>, SlicerV3Error> {
-    let output = write_aff_container(job, timing, build, profile, layers, payloads, Cursor::new(Vec::new()))?;
+    let output = write_aff_container(job, schedule, timing, build, profile, layers, payloads, Cursor::new(Vec::new()))?;
     Ok(output.into_inner())
 }
 
@@ -727,6 +729,7 @@ pub(super) fn build_aff_container(
 /// The output is written from offset zero and returned positioned at its end.
 pub(super) fn write_aff_container<W: Write + Seek>(
     job: &SliceJobV3,
+    schedule: &LayerSettingsSchedule,
     timing: &AffTimingModel,
     build: &AffBuildModel,
     profile: &AffMachineProfile,
@@ -795,7 +798,7 @@ pub(super) fn write_aff_container<W: Write + Seek>(
     } else { 0.0 };
     write_header_body(
         &mut output, version, job.source_width_px, job.source_height_px,
-        timing, build, profile, print_time_sec, volume_ml, weight_g, cost, false,
+        timing, build, profile, print_time_sec, volume_ml, weight_g, cost, !schedule.is_empty(),
     )?;
 
     // Preview TableLength includes the named-table header.
@@ -808,7 +811,7 @@ pub(super) fn write_aff_container<W: Write + Seek>(
         write_color_table_body(&mut output, timing.anti_alias_level)?;
     }
     write_named_table_header(&mut output, "LAYERDEF", layer_def_len)?;
-    write_layer_def_body(&mut output, aff_layer_entries(layers, timing, addresses.layer_image))?;
+    write_layer_def_body(&mut output, aff_layer_entries(layers, timing, schedule, addresses.layer_image))?;
     if version >= 516 {
         write_named_table_header(&mut output, "EXTRA", EXTRA_DECLARED_LENGTH)?;
         write_extra_body(&mut output, timing)?;
@@ -823,7 +826,7 @@ pub(super) fn write_aff_container<W: Write + Seek>(
     }
     if version >= 518 {
         write_named_table_header(&mut output, "SUBIMGS", sub_layer_def_len + 16)?;
-        write_sub_layer_def_body(&mut output, aff_layer_entries(layers, timing, addresses.layer_image))?;
+        write_sub_layer_def_body(&mut output, aff_layer_entries(layers, timing, schedule, addresses.layer_image))?;
         let [p2w, p2h] = profile.preview2_size;
         let p2_pixels = build_preview_rgb565(job.export_thumbnail_png_base64.as_deref(), p2w, p2h);
         write_named_table_header(&mut output, "PREVIEW2", preview2_total)?;
@@ -846,6 +849,7 @@ pub(super) fn write_aff_container<W: Write + Seek>(
 fn aff_layer_entries<'a>(
     layers: &'a [StoredLayer],
     timing: &'a AffTimingModel,
+    schedule: &'a LayerSettingsSchedule,
     mut data_address: u32,
 ) -> impl ExactSizeIterator<Item = AffLayerEntry> + 'a {
     let transition_start = timing.bottom_layer_count as u64;
@@ -863,7 +867,7 @@ fn aff_layer_entries<'a>(
         };
         // The layout pass checked every payload length and cumulative address.
         let data_length = layer.encoded_len as u32;
-        let entry = AffLayerEntry {
+        let mut entry = AffLayerEntry {
             data_address,
             data_length,
             lift_height_mm: if is_bottom { timing.bottom_lift_height_mm + timing.bottom_lift_height2_mm }
@@ -873,6 +877,11 @@ fn aff_layer_entries<'a>(
             layer_height_mm: timing.layer_height_mm, // relative thickness, not absolute Z
             non_zero_pixel_count: layer.non_zero_pixel_count,
         };
+        if let Some(patch) = schedule.patch_at(layer.index as u32) {
+            if let Some(value) = patch.exposure_sec { entry.exposure_time_sec = value as f32; }
+            if let Some(value) = patch.lift_height_mm { entry.lift_height_mm = value as f32; }
+            if let Some(value) = patch.lift_speed_mm_min { entry.lift_speed_mm_s = (value / 60.0) as f32; }
+        }
         data_address += data_length;
         entry
     })
@@ -986,7 +995,7 @@ mod build_container_tests {
     fn one_layer_container(profile: &AffMachineProfile) -> Vec<u8> {
         let layers = [StoredLayer { index: 0, offset: 0, encoded_len: 2, non_zero_pixel_count: 0 }];
         with_payloads(&[0x00, 16], |payloads| {
-            build_aff_container(&make_job(), &dummy_timing(), &pm3m_build(), profile, &layers, payloads).unwrap()
+            build_aff_container(&make_job(), &LayerSettingsSchedule::from_job(&make_job(), super::super::LAYER_SETTINGS_FIELDS).unwrap(), &dummy_timing(), &pm3m_build(), profile, &layers, payloads).unwrap()
         })
     }
 
@@ -1028,6 +1037,62 @@ mod build_container_tests {
         assert!(bytes.windows(8).any(|w| w == b"PREVIEW2"));
     }
 
+
+    #[test]
+    fn layer_settings_ranges_all_aff_variants_decode_records_and_payloads() {
+        use super::super::{AffPluginEncoder, tests::{range_job, range_artifact, range_artifacts}};
+        let variants = ["pws", "pw0", "pwx", "dlp", "dl2p", "pwmo", "pm3n", "pm4n", "pwms", "pwma", "pwmx", "pmx2", "pwmb", "px6s", "pmsq", "pm3", "pm3m", "pm3r", "pm5", "pm5s", "m5sp"];
+        let expected = [10.0f32, 10.0, 4.0, 4.0, 7.0, 9.0, 9.0, 4.0, 4.0, 4.0, 2.0, 2.0];
+        for variant in variants {
+            let job = range_job(".aff", variant);
+            let artifacts = range_artifacts(&AffPluginEncoder, &job);
+            let bytes = &artifacts[0];
+            for other in &artifacts[1..] { assert_eq!(bytes, other, "{variant} public finalizer parity"); }
+            let version = u32_at(bytes, 12);
+            let header = u32_at(bytes, 20) as usize;
+            assert_eq!(u32_at(bytes, header + 16 + 64), 1, "{variant} per-layer flag");
+            let defs = u32_at(bytes, 36) as usize;
+            assert_eq!(u32_at(bytes, defs + 16), 12);
+            let mut plain = job.clone();
+            let mut meta: serde_json::Value = serde_json::from_str(&plain.metadata_json).unwrap();
+            meta.as_object_mut().unwrap().remove("layerSettingsRanges");
+            plain.metadata_json = meta.to_string();
+            let baseline = range_artifact(&AffPluginEncoder, &plain);
+            let baseline_defs = u32_at(&baseline, 36) as usize;
+            for (i, exposure) in expected.iter().enumerate() {
+                let entry = defs + 20 + i * 32;
+                assert_eq!(u32_at(bytes, entry + 16), exposure.to_bits(), "{variant} layer {}", i + 1);
+                let inherited = (2..10).contains(&i);
+                let base_entry = baseline_defs + 20 + i * 32;
+                assert_eq!(u32_at(bytes, entry + 8), if inherited { 8.0f32.to_bits() } else { u32_at(&baseline, base_entry + 8) });
+                assert_eq!(u32_at(bytes, entry + 12), if inherited { 2.0f32.to_bits() } else { u32_at(&baseline, base_entry + 12) });
+                assert_eq!(u32_at(bytes, entry + 20), 0.05f32.to_bits());
+                let address = u32_at(bytes, entry) as usize;
+                let length = u32_at(bytes, entry + 4) as usize;
+                let base_address = u32_at(&baseline, base_entry) as usize;
+                assert_eq!(&bytes[address..address + length], &baseline[base_address..base_address + length]);
+                if version >= 518 {
+                    let sub = u32_at(bytes, 56) as usize + 24 + i * 44;
+                    assert_eq!(u32_at(bytes, sub), address as u32);
+                    assert_eq!(u32_at(bytes, sub + 4), length as u32);
+                    assert_eq!(u32_at(bytes, sub + 8), u32_at(bytes, entry + 24));
+                    // SUBIMGS has no print parameters: its eight floats remain padding.
+                    assert_eq!(&bytes[sub + 12..sub + 44], &[0u8; 32]);
+                }
+            }
+            let baseline_header = u32_at(&baseline, 20) as usize;
+            assert_eq!(u32_at(&baseline, baseline_header + 80), 0);
+            meta["layerSettingsRanges"] = serde_json::json!([]);
+            plain.metadata_json = meta.to_string();
+            assert_eq!(baseline, range_artifact(&AffPluginEncoder, &plain), "{variant} absent/empty parity");
+            meta["layerSettingsRanges"] = serde_json::json!([{"id":"later","startLayer":20,"endLayer":30,"settings":{"exposureSec":0}}]);
+            plain.metadata_json = meta.to_string();
+            let beyond = range_artifact(&AffPluginEncoder, &plain);
+            assert_eq!(u32_at(&beyond, u32_at(&beyond, 20) as usize + 80), 1);
+            assert_eq!(&beyond[defs..defs + 20 + 12 * 32], &baseline[baseline_defs..baseline_defs + 20 + 12 * 32]);
+        }
+    }
+
     fn u32_at(bytes: &[u8], offset: usize) -> u32 {
         u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
     }
@@ -1051,7 +1116,7 @@ mod build_container_tests {
             timing.bottom_layer_count = 1;
             let bytes = with_payloads(&[9, 8, 7, 1, 2, 99], |payloads| {
                 with_payloads(&[], |output| {
-                    let output = write_aff_container(&make_job(), &timing, &pm3m_build(), &profile, &layers, payloads, output).unwrap();
+                    let output = write_aff_container(&make_job(), &LayerSettingsSchedule::from_job(&make_job(), super::super::LAYER_SETTINGS_FIELDS).unwrap(), &timing, &pm3m_build(), &profile, &layers, payloads, output).unwrap();
                     assert_eq!(output.stream_position().unwrap(), expected_image_address as u64 + 5);
                     output.seek(SeekFrom::Start(0)).unwrap();
                     let mut bytes = Vec::new();
@@ -1090,7 +1155,7 @@ mod build_container_tests {
     fn truncated_scratch_extent_is_reported_instead_of_shortening_layer() {
         let layers = [StoredLayer { index: 0, offset: 1, encoded_len: 2, non_zero_pixel_count: 1 }];
         with_payloads(&[9, 8], |payloads| {
-            let error = build_aff_container(&make_job(), &dummy_timing(), &pm3m_build(), &pm3m_profile(), &layers, payloads).unwrap_err();
+            let error = build_aff_container(&make_job(), &LayerSettingsSchedule::from_job(&make_job(), super::super::LAYER_SETTINGS_FIELDS).unwrap(), &dummy_timing(), &pm3m_build(), &pm3m_profile(), &layers, payloads).unwrap_err();
             assert!(error.to_string().contains("AFF layer 0 scratch extent is truncated"));
         });
     }
@@ -1100,7 +1165,7 @@ mod build_container_tests {
         let layers = [StoredLayer { index: 0, offset: 0, encoded_len: u32::MAX as u64, non_zero_pixel_count: 0 }];
         with_payloads(&[], |payloads| {
             let mut output = Cursor::new(Vec::new());
-            let error = write_aff_container(&make_job(), &dummy_timing(), &pm3m_build(), &pm3m_profile(), &layers, payloads, &mut output).unwrap_err();
+            let error = write_aff_container(&make_job(), &LayerSettingsSchedule::from_job(&make_job(), super::super::LAYER_SETTINGS_FIELDS).unwrap(), &dummy_timing(), &pm3m_build(), &pm3m_profile(), &layers, payloads, &mut output).unwrap_err();
             assert!(error.to_string().contains("AFF file exceeds 32-bit format limits"));
             assert!(output.into_inner().is_empty());
         });

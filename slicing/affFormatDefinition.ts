@@ -8,6 +8,7 @@ export const ANYCUBIC_AFF_FORMAT_DEFINITION: SlicingFormatDefinition = {
   layerDataKind: 'raw-mask',
   pluginId: 'anycubic',
   fileExtensionFromVersion: true,
+  layerSettingsFields: ['exposureSec', 'liftHeightMm', 'liftSpeedMmMin'],
   formatVersions: [
     { value: 'pws', label: 'Photon S (pws)' },
     { value: 'pw0', label: 'Photon Zero (pw0)' },

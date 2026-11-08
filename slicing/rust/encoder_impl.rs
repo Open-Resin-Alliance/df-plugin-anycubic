@@ -17,6 +17,13 @@ mod layer_spool;
 
 use crate::encoders::{FormatEncoder, RawMaskStreamEncoder, RleStreamEncoder};
 use crate::engine::SlicerV3Error;
+use crate::layer_settings::{LayerSettingField, LayerSettingsSchedule};
+
+const LAYER_SETTINGS_FIELDS: &[LayerSettingField] = &[
+    LayerSettingField::ExposureSec,
+    LayerSettingField::LiftHeightMm,
+    LayerSettingField::LiftSpeedMmMin,
+];
 use crate::types::{LayerAreaStatsV3, RenderedLayersV3, SliceJobV3};
 
 use afz_layout::{build_afz_container, write_afz_container};
@@ -46,6 +53,10 @@ pub fn create_plugin_encoder() -> Vec<Box<dyn FormatEncoder>> {
 // ═══════════════════════════════════════════════════════════════════
 
 impl FormatEncoder for AffPluginEncoder {
+    fn supports_layer_settings(&self) -> bool {
+        true
+    }
+
     fn output_format(&self) -> &'static str {
         ".aff"
     }
@@ -105,12 +116,13 @@ impl FormatEncoder for AffPluginEncoder {
         _layer_area_stats: &[LayerAreaStatsV3],
         on_progress: Option<&dyn Fn(u32, u32)>,
     ) -> Result<Vec<u8>, SlicerV3Error> {
+        let schedule = LayerSettingsSchedule::from_job(job, LAYER_SETTINGS_FIELDS)?;
         let mut spool = prepare_aff_layers(job, rendered_layers, on_progress)?;
         let timing = parse_aff_timing_model(job);
         let build = parse_aff_build_model(job);
         let profile = aff_machine_profile_for_suffix(&build.key_suffix);
         let (layers, payloads) = spool.ordered_parts()?;
-        let bytes = build_aff_container(job, &timing, &build, profile, layers, payloads)?;
+        let bytes = build_aff_container(job, &schedule, &timing, &build, profile, layers, payloads)?;
         if let Some(progress) = on_progress {
             let total = job.total_layers.saturating_mul(2);
             progress(total, total);
@@ -130,12 +142,13 @@ impl FormatEncoder for AffPluginEncoder {
         _layer_area_stats: &[LayerAreaStatsV3], output_path: &Path,
         on_progress: Option<&dyn Fn(u32, u32)>,
     ) -> Result<(), SlicerV3Error> {
+        let schedule = LayerSettingsSchedule::from_job(job, LAYER_SETTINGS_FIELDS)?;
         let mut spool = prepare_aff_layers(job, rendered_layers, on_progress)?;
         let timing = parse_aff_timing_model(job);
         let build = parse_aff_build_model(job);
         let profile = aff_machine_profile_for_suffix(&build.key_suffix);
         let (layers, payloads) = spool.ordered_parts()?;
-        let mut output = write_aff_container(job, &timing, &build, profile, layers,
+        let mut output = write_aff_container(job, &schedule, &timing, &build, profile, layers,
             payloads, BufWriter::new(File::create(output_path)?))?;
         output.flush()?;
         if let Some(progress) = on_progress {
@@ -323,20 +336,22 @@ impl RawMaskStreamEncoder for AzfStreamEncoder {
 
     fn finalize_to_bytes(mut self: Box<Self>) -> Result<Vec<u8>, SlicerV3Error> {
         self.finish_workers()?;
+        let schedule = LayerSettingsSchedule::from_job(&self.job, LAYER_SETTINGS_FIELDS)?;
         let timing = parse_afz_timing_model(&self.job);
         let build = parse_afz_build_model(&self.job);
         let profile = machine_profile_for_suffix(&build.key_suffix);
         let (layers, payloads) = self.spool.ordered_parts()?;
-        build_afz_container(&self.job, &timing, &build, profile, layers, &[], payloads, None)
+        build_afz_container(&self.job, &schedule, &timing, &build, profile, layers, &[], payloads, None)
     }
 
     fn finalize_to_path(mut self: Box<Self>, output_path: &Path) -> Result<(), SlicerV3Error> {
         self.finish_workers()?;
+        let schedule = LayerSettingsSchedule::from_job(&self.job, LAYER_SETTINGS_FIELDS)?;
         let timing = parse_afz_timing_model(&self.job);
         let build = parse_afz_build_model(&self.job);
         let profile = machine_profile_for_suffix(&build.key_suffix);
         let (layers, payloads) = self.spool.ordered_parts()?;
-        let mut output = write_afz_container(&self.job, &timing, &build, profile,
+        let mut output = write_afz_container(&self.job, &schedule, &timing, &build, profile,
             layers, &[], payloads, BufWriter::new(File::create(output_path)?), None)?;
         output.flush()?;
         Ok(())
@@ -364,19 +379,21 @@ impl RleStreamEncoder for AzfRleStreamEncoder {
     }
 
     fn finalize_to_bytes(mut self: Box<Self>) -> Result<Vec<u8>, SlicerV3Error> {
+        let schedule = LayerSettingsSchedule::from_job(&self.job, LAYER_SETTINGS_FIELDS)?;
         let timing = parse_afz_timing_model(&self.job);
         let build = parse_afz_build_model(&self.job);
         let profile = machine_profile_for_suffix(&build.key_suffix);
         let (layers, payloads) = self.spool.ordered_parts()?;
-        build_afz_container(&self.job, &timing, &build, profile, layers, &self.area_stats, payloads, None)
+        build_afz_container(&self.job, &schedule, &timing, &build, profile, layers, &self.area_stats, payloads, None)
     }
 
     fn finalize_to_path(mut self: Box<Self>, output_path: &Path) -> Result<(), SlicerV3Error> {
+        let schedule = LayerSettingsSchedule::from_job(&self.job, LAYER_SETTINGS_FIELDS)?;
         let timing = parse_afz_timing_model(&self.job);
         let build = parse_afz_build_model(&self.job);
         let profile = machine_profile_for_suffix(&build.key_suffix);
         let (layers, payloads) = self.spool.ordered_parts()?;
-        let mut output = write_afz_container(&self.job, &timing, &build, profile,
+        let mut output = write_afz_container(&self.job, &schedule, &timing, &build, profile,
             layers, &self.area_stats, payloads, BufWriter::new(File::create(output_path)?), None)?;
         output.flush()?;
         Ok(())
@@ -388,6 +405,10 @@ impl RleStreamEncoder for AzfRleStreamEncoder {
 // ═══════════════════════════════════════════════════════════════════
 
 impl FormatEncoder for AzfPluginEncoder {
+    fn supports_layer_settings(&self) -> bool {
+        true
+    }
+
     fn output_format(&self) -> &'static str {
         ".azf"
     }
@@ -503,12 +524,13 @@ impl FormatEncoder for AzfPluginEncoder {
         &self, job: &SliceJobV3, rendered_layers: &RenderedLayersV3,
         layer_area_stats: &[LayerAreaStatsV3], on_progress: Option<&dyn Fn(u32, u32)>,
     ) -> Result<Vec<u8>, SlicerV3Error> {
+        let schedule = LayerSettingsSchedule::from_job(job, LAYER_SETTINGS_FIELDS)?;
         let mut spool = prepare_afz_layers(job, rendered_layers, on_progress)?;
         let timing = parse_afz_timing_model(job);
         let build = parse_afz_build_model(job);
         let profile = machine_profile_for_suffix(&build.key_suffix);
         let (layers, payloads) = spool.ordered_parts()?;
-        let bytes = build_afz_container(job, &timing, &build, profile, layers, layer_area_stats, payloads, None)?;
+        let bytes = build_afz_container(job, &schedule, &timing, &build, profile, layers, layer_area_stats, payloads, None)?;
         if let Some(progress) = on_progress {
             let total = job.total_layers.saturating_mul(2);
             progress(total, total);
@@ -528,12 +550,13 @@ impl FormatEncoder for AzfPluginEncoder {
         layer_area_stats: &[LayerAreaStatsV3], output_path: &Path,
         on_progress: Option<&dyn Fn(u32, u32)>,
     ) -> Result<(), SlicerV3Error> {
+        let schedule = LayerSettingsSchedule::from_job(job, LAYER_SETTINGS_FIELDS)?;
         let mut spool = prepare_afz_layers(job, rendered_layers, on_progress)?;
         let timing = parse_afz_timing_model(job);
         let build = parse_afz_build_model(job);
         let profile = machine_profile_for_suffix(&build.key_suffix);
         let (layers, payloads) = spool.ordered_parts()?;
-        let mut output = write_afz_container(job, &timing, &build, profile, layers,
+        let mut output = write_afz_container(job, &schedule, &timing, &build, profile, layers,
             layer_area_stats, payloads, BufWriter::new(File::create(output_path)?), None)?;
         output.flush()?;
         if let Some(progress) = on_progress {
@@ -647,19 +670,21 @@ impl RleStreamEncoder for AffRleStreamEncoder {
     }
 
     fn finalize_to_bytes(mut self: Box<Self>) -> Result<Vec<u8>, SlicerV3Error> {
+        let schedule = LayerSettingsSchedule::from_job(&self.job, LAYER_SETTINGS_FIELDS)?;
         let timing = parse_aff_timing_model(&self.job);
         let build = parse_aff_build_model(&self.job);
         let profile = aff_machine_profile_for_suffix(&build.key_suffix);
         let (layers, payloads) = self.spool.ordered_parts()?;
-        build_aff_container(&self.job, &timing, &build, profile, layers, payloads)
+        build_aff_container(&self.job, &schedule, &timing, &build, profile, layers, payloads)
     }
 
     fn finalize_to_path(mut self: Box<Self>, output_path: &Path) -> Result<(), SlicerV3Error> {
+        let schedule = LayerSettingsSchedule::from_job(&self.job, LAYER_SETTINGS_FIELDS)?;
         let timing = parse_aff_timing_model(&self.job);
         let build = parse_aff_build_model(&self.job);
         let profile = aff_machine_profile_for_suffix(&build.key_suffix);
         let (layers, payloads) = self.spool.ordered_parts()?;
-        let mut output = write_aff_container(&self.job, &timing, &build, profile, layers,
+        let mut output = write_aff_container(&self.job, &schedule, &timing, &build, profile, layers,
             payloads, BufWriter::new(File::create(output_path)?))?;
         output.flush()?;
         Ok(())
@@ -761,7 +786,7 @@ fn encode_pixels_as_grayscale_png(
 mod tests {
     use super::*;
 
-    fn make_job(output_format: &str, layers: u32) -> SliceJobV3 {
+    pub(super) fn make_job(output_format: &str, layers: u32) -> SliceJobV3 {
         SliceJobV3 {
             output_format: output_format.to_string(),
             format_version: None,
@@ -788,6 +813,163 @@ mod tests {
         }
     }
 
+
+
+    pub(super) fn range_job(format: &str, variant: &str) -> SliceJobV3 {
+        let mut job = make_job(format, 12);
+        job.format_version = Some(variant.to_string());
+        job.metadata_json = serde_json::json!({
+            "printer": { "settingsMode": "twostage" },
+            "material": {
+                "bottomLayerCount": 2, "transitionLayerCount": 2,
+                "bottomExposureSec": 10.0, "normalExposureSec": 2.0,
+                "bottomLiftDistanceMm": 3.125, "bottomLiftDistance2Mm": 1.75,
+                "liftDistanceMm": 4.375, "liftDistance2Mm": 2.25,
+                "bottomLiftSpeedMmMin": 90.0, "liftSpeedMmMin": 180.0
+            },
+            "layerSettingsRanges": [
+                { "id": "A", "startLayer": 3, "endLayer": 10,
+                  "settings": { "exposureSec": 4.0, "liftHeightMm": 8.0, "liftSpeedMmMin": 120.0 } },
+                { "id": "B", "startLayer": 5, "endLayer": 6, "settings": { "exposureSec": 7.0 } },
+                { "id": "C", "startLayer": 6, "endLayer": 7, "settings": { "exposureSec": 9.0 } }
+            ]
+        }).to_string();
+        job
+    }
+
+    pub(super) fn range_masks(job: &SliceJobV3) -> RenderedLayersV3 {
+        let pixels = job.source_width_px as usize * job.source_height_px as usize;
+        RenderedLayersV3 {
+            raw_mask_layers: Some((0..job.total_layers).map(|i| {
+                (0..pixels).map(|p| if (p + i as usize) % 3 == 0 { 255 } else { 0 }).collect()
+            }).collect()),
+            ..Default::default()
+        }
+    }
+
+    pub(super) struct Destination(pub std::path::PathBuf);
+    impl Destination {
+        pub(super) fn new() -> Self {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!("anycubic-ranges-{}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+                NEXT.fetch_add(1, Ordering::Relaxed)));
+            Self(path)
+        }
+    }
+    impl Drop for Destination {
+        fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); }
+    }
+
+    pub(super) fn range_artifact(encoder: &dyn FormatEncoder, job: &SliceJobV3) -> Vec<u8> {
+        let rendered = range_masks(job);
+        encoder.encode_container_from_rendered_layers(job, &rendered, &range_stats(&rendered)).unwrap()
+    }
+
+    fn range_stats(rendered: &RenderedLayersV3) -> Vec<LayerAreaStatsV3> {
+        rendered.raw_mask_layers.as_ref().unwrap().iter().map(|mask| LayerAreaStatsV3 {
+            total_solid_pixels: mask.iter().filter(|&&v| v > 0).count() as u32,
+            ..Default::default()
+        }).collect()
+    }
+
+    // Public entry points, independent physical arrival orders, real containers.
+    pub(super) fn range_artifacts(encoder: &dyn FormatEncoder, job: &SliceJobV3) -> Vec<Vec<u8>> {
+        let rendered = range_masks(job);
+        let masks = rendered.raw_mask_layers.as_ref().unwrap();
+        let stats = range_stats(&rendered);
+        let mut artifacts = vec![encoder.encode_container_from_rendered_layers(job, &rendered, &stats).unwrap()];
+        let path = Destination::new();
+        encoder.encode_container_to_path(job, &rendered, &stats, &path.0).unwrap();
+        artifacts.push(std::fs::read(&path.0).unwrap());
+        for to_path in [false, true] {
+            let mut stream = encoder.create_rle_stream_encoder(job).unwrap().unwrap();
+            for i in (0..job.total_layers).rev() {
+                stream.consume_rle_layer(i, mask_to_runs(&masks[i as usize])).unwrap();
+            }
+            stream.set_area_stats(stats.clone());
+            if to_path {
+                stream.finalize_to_path(&path.0).unwrap();
+                artifacts.push(std::fs::read(&path.0).unwrap());
+            } else { artifacts.push(stream.finalize_to_bytes().unwrap()); }
+        }
+        if job.output_format == ".azf" {
+            for to_path in [false, true] {
+                let mut stream = encoder.create_raw_mask_stream_encoder(job).unwrap().unwrap();
+                for i in (0..job.total_layers).rev() {
+                    stream.consume_raw_mask_layer(i, masks[i as usize].clone()).unwrap();
+                }
+                if to_path {
+                    stream.finalize_to_path(&path.0).unwrap();
+                    artifacts.push(std::fs::read(&path.0).unwrap());
+                } else { artifacts.push(stream.finalize_to_bytes().unwrap()); }
+            }
+        }
+        artifacts
+    }
+
+    #[test]
+    fn layer_settings_ranges_invalid_finalizers_preserve_destinations() {
+        let encoders: [&dyn FormatEncoder; 2] = [&AffPluginEncoder, &AzfPluginEncoder];
+        let invalid = [
+            serde_json::json!(null),
+            serde_json::json!([{"id":"bad","startLayer":0,"endLayer":1,"settings":{"exposureSec":1}}]),
+            serde_json::json!([{"id":"bad","startLayer":20,"endLayer":30,"settings":{"lightPwm":1}}]),
+            serde_json::json!([{"id":"bad","startLayer":1,"endLayer":1,"settings":{"exposureSec":null}}]),
+            serde_json::json!([{"id":"bad","startLayer":2,"endLayer":1,"settings":{"exposureSec":1}}]),
+            serde_json::json!([{"id":"bad","startLayer":1.5,"endLayer":2,"settings":{"exposureSec":1}}]),
+            serde_json::json!([{"id":"bad","startLayer":1,"endLayer":2,"settings":{"unknown":1}}]),
+            serde_json::json!([
+                {"id":"same","startLayer":1,"endLayer":2,"settings":{"exposureSec":1}},
+                {"id":"same","startLayer":1,"endLayer":2,"settings":{"exposureSec":2}}
+            ]),
+            // Unsupported fields must fail even when a narrower valid range shadows them.
+            serde_json::json!([
+                {"id":"bad","startLayer":1,"endLayer":100,"settings":{"lightPwm":1}},
+                {"id":"good","startLayer":1,"endLayer":12,"settings":{"exposureSec":2}}
+            ])
+        ];
+        for encoder in encoders {
+            for ranges in &invalid {
+                let mut job = make_job(encoder.output_format(), 1);
+                job.metadata_json = serde_json::json!({"layerSettingsRanges": ranges}).to_string();
+                let rendered = range_masks(&job);
+                assert!(encoder.encode_container_from_rendered_layers(&job, &rendered, &[]).is_err());
+                let mut stream = encoder.create_rle_stream_encoder(&job).unwrap().unwrap();
+                stream.consume_rle_layer(0, mask_to_runs(&rendered.raw_mask_layers.as_ref().unwrap()[0])).unwrap();
+                assert!(stream.finalize_to_bytes().is_err());
+                if job.output_format == ".azf" {
+                    let mut stream = encoder.create_raw_mask_stream_encoder(&job).unwrap().unwrap();
+                    stream.consume_raw_mask_layer(0, rendered.raw_mask_layers.as_ref().unwrap()[0].clone()).unwrap();
+                    assert!(stream.finalize_to_bytes().is_err());
+                }
+                for exists in [false, true] {
+                    let path = Destination::new();
+                    if exists { std::fs::write(&path.0, b"preserve destination").unwrap(); }
+                    let unchanged = || {
+                        if exists { assert_eq!(std::fs::read(&path.0).unwrap(), b"preserve destination"); }
+                        else { assert!(!path.0.exists()); }
+                    };
+                    assert!(encoder.encode_container_to_path(&job, &rendered, &[], &path.0).is_err());
+                    unchanged();
+                    assert!(encoder.encode_container_to_path_with_progress(&job, &rendered, &[], &path.0, None).is_err());
+                    unchanged();
+                    let mut stream = encoder.create_rle_stream_encoder(&job).unwrap().unwrap();
+                    stream.consume_rle_layer(0, mask_to_runs(&rendered.raw_mask_layers.as_ref().unwrap()[0])).unwrap();
+                    assert!(stream.finalize_to_path(&path.0).is_err());
+                    unchanged();
+                    if job.output_format == ".azf" {
+                        let mut stream = encoder.create_raw_mask_stream_encoder(&job).unwrap().unwrap();
+                        stream.consume_raw_mask_layer(0, rendered.raw_mask_layers.as_ref().unwrap()[0].clone()).unwrap();
+                        assert!(stream.finalize_to_path(&path.0).is_err());
+                        unchanged();
+                    }
+                }
+            }
+        }
+    }
 
     /// Runs of a mask, as the rasterizer streams them.
     fn mask_to_runs(mask: &[u8]) -> Vec<crate::rle::RleRun> {

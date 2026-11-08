@@ -8,6 +8,7 @@ export const ANYCUBIC_AZF_FORMAT_DEFINITION: SlicingFormatDefinition = {
   layerDataKind: 'raw-mask',
   pluginId: 'anycubic',
   fileExtensionFromVersion: true,
+  layerSettingsFields: ['exposureSec', 'liftHeightMm', 'liftSpeedMmMin'],
   formatVersions: [
     { value: 'pm4u', label: 'Photon Mono 4 Ultra (pm4u)' },
     { value: 'pm7', label: 'Photon Mono M7 (pm7)', isDefault: true },
