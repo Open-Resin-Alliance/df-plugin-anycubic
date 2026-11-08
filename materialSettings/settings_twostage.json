@@ -1,0 +1,399 @@
+{
+  "displayName": "Anycubic Resin Settings",
+  "replacesDefaultMaterialSettings": true,
+  "tabs": [
+    {
+      "id": "twostage",
+      "title": "Advanced",
+      "order": 10
+    }
+  ],
+  "sections": [
+    {
+      "id": "layers-exposure-ts",
+      "title": "Layers and Exposure",
+      "tabId": "twostage",
+      "order": 10
+    },
+    {
+      "id": "normal-layers",
+      "title": "Normal Layers Control",
+      "tabId": "twostage",
+      "order": 20
+    },
+    {
+      "id": "bottom-layers",
+      "title": "Bottom Layers Control",
+      "tabId": "twostage",
+      "order": 30
+    }
+  ],
+  "cards": [
+    {
+      "id": "layers-exposure-ts-card",
+      "title": "Layers and Exposure",
+      "tabId": "twostage",
+      "sectionId": "layers-exposure-ts",
+      "order": 10
+    },
+    {
+      "id": "normal-layers-card",
+      "title": "Normal Layers Control",
+      "tabId": "twostage",
+      "sectionId": "normal-layers",
+      "order": 10
+    },
+    {
+      "id": "bottom-layers-card",
+      "title": "Bottom Layers Control",
+      "tabId": "twostage",
+      "sectionId": "bottom-layers",
+      "order": 10
+    }
+  ],
+  "fields": [
+    {
+      "key": "layerHeightMm",
+      "label": "Layer Thickness (mm)",
+      "kind": "number",
+      "defaultValue": 0.05,
+      "min": 0.001,
+      "max": 1,
+      "step": 0.001,
+      "placement": {
+        "tabId": "twostage",
+        "sectionId": "layers-exposure-ts",
+        "cardId": "layers-exposure-ts-card",
+        "order": 10
+      },
+      "metadataPath": "material.layerHeightMm",
+      "perLayerEditable": false
+    },
+    {
+      "key": "normalExposureSec",
+      "label": "Normal Exposure Time (s)",
+      "kind": "number",
+      "defaultValue": 2,
+      "min": 0,
+      "max": 300,
+      "step": 0.001,
+      "placement": {
+        "tabId": "twostage",
+        "sectionId": "layers-exposure-ts",
+        "cardId": "layers-exposure-ts-card",
+        "order": 20
+      },
+      "metadataPath": "material.normalExposureSec",
+      "perLayerEditable": true,
+      "perLayerField": "exposureSec"
+    },
+    {
+      "key": "waitTimeBeforeCureSec",
+      "label": "Off Time (s)",
+      "kind": "number",
+      "defaultValue": 1,
+      "min": 0,
+      "max": 120,
+      "step": 0.001,
+      "placement": {
+        "tabId": "twostage",
+        "sectionId": "layers-exposure-ts",
+        "cardId": "layers-exposure-ts-card",
+        "order": 30
+      },
+      "metadataPath": "material.waitTimeBeforeCureSec",
+      "perLayerEditable": false
+    },
+    {
+      "key": "bottomExposureSec",
+      "label": "Bottom Exposure Time (s)",
+      "kind": "number",
+      "defaultValue": 45,
+      "min": 0,
+      "max": 300,
+      "step": 0.001,
+      "placement": {
+        "tabId": "twostage",
+        "sectionId": "layers-exposure-ts",
+        "cardId": "layers-exposure-ts-card",
+        "order": 40
+      },
+      "metadataPath": "material.bottomExposureSec",
+      "perLayerEditable": false
+    },
+    {
+      "key": "bottomLayerCount",
+      "label": "Bottom Layers",
+      "kind": "integer",
+      "defaultValue": 5,
+      "min": 0,
+      "max": 200,
+      "step": 1,
+      "placement": {
+        "tabId": "twostage",
+        "sectionId": "layers-exposure-ts",
+        "cardId": "layers-exposure-ts-card",
+        "order": 50
+      },
+      "metadataPath": "material.bottomLayerCount",
+      "perLayerEditable": false
+    },
+    {
+      "key": "transitionLayerCount",
+      "label": "Transition Layer Count",
+      "kind": "integer",
+      "defaultValue": 15,
+      "min": 0,
+      "max": 100000,
+      "step": 1,
+      "placement": {
+        "tabId": "twostage",
+        "sectionId": "layers-exposure-ts",
+        "cardId": "layers-exposure-ts-card",
+        "order": 60
+      },
+      "metadataPath": "material.transitionLayerCount",
+      "perLayerEditable": false
+    },
+    {
+      "key": "liftDistanceMm",
+      "label": "Z Lift Distance (mm)",
+      "kind": "number",
+      "defaultValue": 3,
+      "splitWithKey": "liftDistance2Mm",
+      "tag": "Slow",
+      "min": 0,
+      "max": 50,
+      "step": 0.001,
+      "placement": {
+        "tabId": "twostage",
+        "sectionId": "normal-layers",
+        "cardId": "normal-layers-card",
+        "order": 10
+      },
+      "metadataPath": "material.liftDistanceMm",
+      "perLayerEditable": true,
+      "perLayerField": "liftHeightMm"
+    },
+    {
+      "key": "liftDistance2Mm",
+      "label": "Z Lift Distance Step 2 (mm)",
+      "kind": "number",
+      "defaultValue": 5,
+      "tag": "Fast",
+      "min": 0,
+      "max": 50,
+      "step": 0.001,
+      "placement": {
+        "tabId": "twostage",
+        "sectionId": "normal-layers",
+        "cardId": "normal-layers-card",
+        "order": 11
+      },
+      "metadataPath": "material.liftDistance2Mm",
+      "perLayerEditable": false
+    },
+    {
+      "key": "liftSpeedMmMin",
+      "label": "Z Lift Speed (mm/min)",
+      "kind": "number",
+      "defaultValue": 120,
+      "splitWithKey": "liftSpeed2MmMin",
+      "tag": "Slow",
+      "min": 0,
+      "max": 100000,
+      "step": 1,
+      "placement": {
+        "tabId": "twostage",
+        "sectionId": "normal-layers",
+        "cardId": "normal-layers-card",
+        "order": 20
+      },
+      "metadataPath": "material.liftSpeedMmMin",
+      "perLayerEditable": true
+    },
+    {
+      "key": "liftSpeed2MmMin",
+      "label": "Z Lift Speed Step 2 (mm/min)",
+      "kind": "number",
+      "defaultValue": 360,
+      "tag": "Fast",
+      "min": 0,
+      "max": 100000,
+      "step": 1,
+      "placement": {
+        "tabId": "twostage",
+        "sectionId": "normal-layers",
+        "cardId": "normal-layers-card",
+        "order": 21
+      },
+      "metadataPath": "material.liftSpeed2MmMin",
+      "perLayerEditable": false
+    },
+    {
+      "key": "retractSpeed2MmMin",
+      "label": "Z Retract Speed (mm/min)",
+      "kind": "number",
+      "defaultValue": 360,
+      "splitWithKey": "retractSpeedMmMin",
+      "tag": "Fast",
+      "min": 0,
+      "max": 100000,
+      "step": 1,
+      "placement": {
+        "tabId": "twostage",
+        "sectionId": "normal-layers",
+        "cardId": "normal-layers-card",
+        "order": 30
+      },
+      "metadataPath": "material.retractSpeed2MmMin",
+      "perLayerEditable": false
+    },
+    {
+      "key": "retractSpeedMmMin",
+      "label": "Z Retract Speed Step 2 (mm/min)",
+      "kind": "number",
+      "defaultValue": 120,
+      "tag": "Slow",
+      "min": 0,
+      "max": 100000,
+      "step": 1,
+      "placement": {
+        "tabId": "twostage",
+        "sectionId": "normal-layers",
+        "cardId": "normal-layers-card",
+        "order": 31
+      },
+      "metadataPath": "material.retractSpeedMmMin",
+      "perLayerEditable": false
+    },
+    {
+      "key": "bottomLiftDistanceMm",
+      "label": "Z Lift Distance (mm)",
+      "kind": "number",
+      "defaultValue": 5,
+      "splitWithKey": "bottomLiftDistance2Mm",
+      "tag": "Slow",
+      "min": 0,
+      "max": 50,
+      "step": 0.001,
+      "placement": {
+        "tabId": "twostage",
+        "sectionId": "bottom-layers",
+        "cardId": "bottom-layers-card",
+        "order": 10
+      },
+      "metadataPath": "material.bottomLiftDistanceMm",
+      "perLayerEditable": false
+    },
+    {
+      "key": "bottomLiftDistance2Mm",
+      "label": "Z Lift Distance Step 2 (mm)",
+      "kind": "number",
+      "defaultValue": 3,
+      "tag": "Fast",
+      "min": 0,
+      "max": 50,
+      "step": 0.001,
+      "placement": {
+        "tabId": "twostage",
+        "sectionId": "bottom-layers",
+        "cardId": "bottom-layers-card",
+        "order": 11
+      },
+      "metadataPath": "material.bottomLiftDistance2Mm",
+      "perLayerEditable": false
+    },
+    {
+      "key": "bottomLiftSpeedMmMin",
+      "label": "Z Lift Speed (mm/min)",
+      "kind": "number",
+      "defaultValue": 120,
+      "splitWithKey": "bottomLiftSpeed2MmMin",
+      "tag": "Slow",
+      "min": 0,
+      "max": 100000,
+      "step": 1,
+      "placement": {
+        "tabId": "twostage",
+        "sectionId": "bottom-layers",
+        "cardId": "bottom-layers-card",
+        "order": 20
+      },
+      "metadataPath": "material.bottomLiftSpeedMmMin",
+      "perLayerEditable": false
+    },
+    {
+      "key": "bottomLiftSpeed2MmMin",
+      "label": "Z Lift Speed Step 2 (mm/min)",
+      "kind": "number",
+      "defaultValue": 180,
+      "tag": "Fast",
+      "min": 0,
+      "max": 100000,
+      "step": 1,
+      "placement": {
+        "tabId": "twostage",
+        "sectionId": "bottom-layers",
+        "cardId": "bottom-layers-card",
+        "order": 21
+      },
+      "metadataPath": "material.bottomLiftSpeed2MmMin",
+      "perLayerEditable": false
+    },
+    {
+      "key": "bottomRetractSpeed2MmMin",
+      "label": "Z Retract Speed (mm/min)",
+      "kind": "number",
+      "defaultValue": 240,
+      "splitWithKey": "bottomRetractSpeedMmMin",
+      "tag": "Fast",
+      "min": 0,
+      "max": 100000,
+      "step": 1,
+      "placement": {
+        "tabId": "twostage",
+        "sectionId": "bottom-layers",
+        "cardId": "bottom-layers-card",
+        "order": 30
+      },
+      "metadataPath": "material.bottomRetractSpeed2MmMin",
+      "perLayerEditable": false
+    },
+    {
+      "key": "bottomRetractSpeedMmMin",
+      "label": "Z Retract Speed Step 2 (mm/min)",
+      "kind": "number",
+      "defaultValue": 180,
+      "tag": "Slow",
+      "min": 0,
+      "max": 100000,
+      "step": 1,
+      "placement": {
+        "tabId": "twostage",
+        "sectionId": "bottom-layers",
+        "cardId": "bottom-layers-card",
+        "order": 31
+      },
+      "metadataPath": "material.bottomRetractSpeedMmMin",
+      "perLayerEditable": false
+    },
+    {
+      "key": "targetTemperatureC",
+      "label": "Target Temperature (°C)",
+      "kind": "number",
+      "defaultValue": 25,
+      "min": 0,
+      "max": 100,
+      "step": 1,
+      "placement": {
+        "tabId": "twostage",
+        "sectionId": "layers-exposure-ts",
+        "cardId": "layers-exposure-ts-card",
+        "order": 70
+      },
+      "metadataPath": "material.targetTemperatureC",
+      "perLayerEditable": false
+    }
+  ]
+}

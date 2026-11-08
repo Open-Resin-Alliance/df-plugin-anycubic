@@ -1,0 +1,229 @@
+{
+  "displayName": "Anycubic Resin Settings",
+  "replacesDefaultMaterialSettings": true,
+  "tabs": [
+    {
+      "id": "simple",
+      "title": "Simple",
+      "order": 10
+    }
+  ],
+  "sections": [
+    {
+      "id": "layers-exposure",
+      "title": "Layers and Exposure",
+      "tabId": "simple",
+      "order": 10
+    },
+    {
+      "id": "print-control",
+      "title": "Print Control",
+      "tabId": "simple",
+      "order": 20
+    }
+  ],
+  "cards": [
+    {
+      "id": "layers-exposure-card",
+      "title": "Layers and Exposure",
+      "tabId": "simple",
+      "sectionId": "layers-exposure",
+      "order": 10
+    },
+    {
+      "id": "print-control-card",
+      "title": "Print Control",
+      "tabId": "simple",
+      "sectionId": "print-control",
+      "order": 10
+    }
+  ],
+  "fields": [
+    {
+      "key": "layerHeightMm",
+      "label": "Layer Thickness (mm)",
+      "kind": "number",
+      "defaultValue": 0.05,
+      "min": 0.001,
+      "max": 1,
+      "step": 0.001,
+      "placement": {
+        "tabId": "simple",
+        "sectionId": "layers-exposure",
+        "cardId": "layers-exposure-card",
+        "order": 10
+      },
+      "metadataPath": "material.layerHeightMm",
+      "perLayerEditable": false
+    },
+    {
+      "key": "normalExposureSec",
+      "label": "Normal Exposure Time (s)",
+      "kind": "number",
+      "defaultValue": 2,
+      "min": 0,
+      "max": 300,
+      "step": 0.001,
+      "placement": {
+        "tabId": "simple",
+        "sectionId": "layers-exposure",
+        "cardId": "layers-exposure-card",
+        "order": 20
+      },
+      "metadataPath": "material.normalExposureSec",
+      "perLayerEditable": true,
+      "perLayerField": "exposureSec"
+    },
+    {
+      "key": "bottomLayerCount",
+      "label": "Bottom Layers",
+      "kind": "integer",
+      "defaultValue": 5,
+      "min": 0,
+      "max": 200,
+      "step": 1,
+      "placement": {
+        "tabId": "simple",
+        "sectionId": "layers-exposure",
+        "cardId": "layers-exposure-card",
+        "order": 30
+      },
+      "metadataPath": "material.bottomLayerCount",
+      "perLayerEditable": false
+    },
+    {
+      "key": "bottomExposureSec",
+      "label": "Bottom Exposure Time (s)",
+      "kind": "number",
+      "defaultValue": 45,
+      "min": 0,
+      "max": 300,
+      "step": 0.001,
+      "placement": {
+        "tabId": "simple",
+        "sectionId": "layers-exposure",
+        "cardId": "layers-exposure-card",
+        "order": 40
+      },
+      "metadataPath": "material.bottomExposureSec",
+      "perLayerEditable": false
+    },
+    {
+      "key": "transitionLayerCount",
+      "label": "Transition Layer Count",
+      "kind": "integer",
+      "defaultValue": 15,
+      "min": 0,
+      "max": 100000,
+      "step": 1,
+      "placement": {
+        "tabId": "simple",
+        "sectionId": "layers-exposure",
+        "cardId": "layers-exposure-card",
+        "order": 50
+      },
+      "metadataPath": "material.transitionLayerCount",
+      "perLayerEditable": false
+    },
+    {
+      "key": "waitTimeBeforeCureSec",
+      "label": "Off Time (s)",
+      "kind": "number",
+      "defaultValue": 1,
+      "min": 0,
+      "max": 120,
+      "step": 0.001,
+      "placement": {
+        "tabId": "simple",
+        "sectionId": "layers-exposure",
+        "cardId": "layers-exposure-card",
+        "order": 60
+      },
+      "metadataPath": "material.waitTimeBeforeCureSec",
+      "perLayerEditable": false
+    },
+    {
+      "key": "liftDistanceMm",
+      "label": "Z Lift Distance (mm)",
+      "kind": "number",
+      "defaultValue": 5,
+      "min": 0,
+      "max": 50,
+      "step": 0.001,
+      "placement": {
+        "tabId": "simple",
+        "sectionId": "print-control",
+        "cardId": "print-control-card",
+        "order": 10
+      },
+      "metadataPath": "material.liftDistanceMm",
+      "perLayerEditable": true,
+      "perLayerField": "liftHeightMm"
+    },
+    {
+      "key": "liftSpeedMmMin",
+      "label": "Z Lift Speed (mm/min)",
+      "kind": "number",
+      "defaultValue": 120,
+      "min": 0,
+      "max": 100000,
+      "step": 1,
+      "placement": {
+        "tabId": "simple",
+        "sectionId": "print-control",
+        "cardId": "print-control-card",
+        "order": 20
+      },
+      "metadataPath": "material.liftSpeedMmMin",
+      "perLayerEditable": true
+    },
+    {
+      "key": "retractSpeedMmMin",
+      "label": "Z Retract Speed (mm/min)",
+      "kind": "number",
+      "defaultValue": 120,
+      "min": 0,
+      "max": 100000,
+      "step": 1,
+      "placement": {
+        "tabId": "simple",
+        "sectionId": "print-control",
+        "cardId": "print-control-card",
+        "order": 30
+      },
+      "metadataPath": "material.retractSpeedMmMin",
+      "perLayerEditable": false
+    },
+    {
+      "key": "intelligentRelease",
+      "label": "Intelligent Release",
+      "kind": "boolean",
+      "defaultValue": false,
+      "placement": {
+        "tabId": "simple",
+        "sectionId": "print-control",
+        "cardId": "print-control-card",
+        "order": 40
+      },
+      "metadataPath": "material.intelligentRelease",
+      "perLayerEditable": false
+    },
+    {
+      "key": "targetTemperatureC",
+      "label": "Target Temperature (°C)",
+      "kind": "number",
+      "defaultValue": 25,
+      "min": 0,
+      "max": 100,
+      "step": 1,
+      "placement": {
+        "tabId": "simple",
+        "sectionId": "print-control",
+        "cardId": "print-control-card",
+        "order": 50
+      },
+      "metadataPath": "material.targetTemperatureC",
+      "perLayerEditable": false
+    }
+  ]
+}
