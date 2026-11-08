@@ -1038,13 +1038,28 @@ mod build_container_tests {
     }
 
 
-    #[test]
-    fn layer_settings_ranges_all_aff_variants_decode_records_and_payloads() {
+    fn assert_aff_range_variants(millimeters: bool) {
         use super::super::{AffPluginEncoder, tests::{range_job, range_artifact, range_artifacts}};
         let variants = ["pws", "pw0", "pwx", "dlp", "dl2p", "pwmo", "pm3n", "pm4n", "pwms", "pwma", "pwmx", "pmx2", "pwmb", "px6s", "pmsq", "pm3", "pm3m", "pm3r", "pm5", "pm5s", "m5sp"];
         let expected = [10.0f32, 10.0, 4.0, 4.0, 7.0, 9.0, 9.0, 4.0, 4.0, 4.0, 2.0, 2.0];
         for variant in variants {
-            let job = range_job(".aff", variant);
+            let mut job = range_job(".aff", variant);
+            if millimeters {
+                let mut metadata: serde_json::Value = serde_json::from_str(&job.metadata_json).unwrap();
+                let mut ranges = metadata["layerSettingsRanges"].clone();
+                for (range, (start, end)) in ranges.as_array_mut().unwrap().iter_mut()
+                    .zip([(0.15, 0.5), (0.25, 0.3), (0.3, 0.35)])
+                {
+                    let object = range.as_object_mut().unwrap();
+                    object.remove("startLayer");
+                    object.remove("endLayer");
+                    object.insert("unit".into(), serde_json::json!("mm"));
+                    object.insert("startMm".into(), serde_json::json!(start));
+                    object.insert("endMm".into(), serde_json::json!(end));
+                }
+                metadata["layerSettingsRanges"] = ranges;
+                job.metadata_json = metadata.to_string();
+            }
             let artifacts = range_artifacts(&AffPluginEncoder, &job);
             let bytes = &artifacts[0];
             for other in &artifacts[1..] { assert_eq!(bytes, other, "{variant} public finalizer parity"); }
@@ -1085,12 +1100,26 @@ mod build_container_tests {
             meta["layerSettingsRanges"] = serde_json::json!([]);
             plain.metadata_json = meta.to_string();
             assert_eq!(baseline, range_artifact(&AffPluginEncoder, &plain), "{variant} absent/empty parity");
-            meta["layerSettingsRanges"] = serde_json::json!([{"id":"later","startLayer":20,"endLayer":30,"settings":{"exposureSec":0}}]);
+            meta["layerSettingsRanges"] = if millimeters {
+                serde_json::json!([{"id":"later","unit":"mm","startMm":1.0,"endMm":1.5,"settings":{"exposureSec":0}}])
+            } else {
+                serde_json::json!([{"id":"later","startLayer":20,"endLayer":30,"settings":{"exposureSec":0}}])
+            };
             plain.metadata_json = meta.to_string();
             let beyond = range_artifact(&AffPluginEncoder, &plain);
             assert_eq!(u32_at(&beyond, u32_at(&beyond, 20) as usize + 80), 1);
             assert_eq!(&beyond[defs..defs + 20 + 12 * 32], &baseline[baseline_defs..baseline_defs + 20 + 12 * 32]);
         }
+    }
+
+    #[test]
+    fn layer_settings_ranges_all_aff_variants_decode_records_and_payloads() {
+        assert_aff_range_variants(false);
+    }
+
+    #[test]
+    fn layer_settings_ranges_mm_all_aff_variants_decode_records_and_payloads() {
+        assert_aff_range_variants(true);
     }
 
     fn u32_at(bytes: &[u8], offset: usize) -> u32 {

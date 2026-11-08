@@ -845,12 +845,27 @@ mod tests {
         serde_json::from_slice(&entries.iter().find(|(n, _)| n == name).unwrap().1).unwrap()
     }
 
-    #[test]
-    fn layer_settings_ranges_all_azf_variants_preserve_legacy_baselines() {
+    fn assert_azf_range_variants(millimeters: bool) {
         use super::super::{AzfPluginEncoder, tests::{range_job, range_artifact, range_artifacts}};
         let expected = [10.0, 10.0, 4.0, 4.0, 7.0, 9.0, 9.0, 4.0, 4.0, 4.0, 2.0, 2.0];
         for variant in ["pm4u", "pm7", "pm7m", "pwsz", "pp1", "pp1m"] {
-            let job = range_job(".azf", variant);
+            let mut job = range_job(".azf", variant);
+            if millimeters {
+                let mut metadata: serde_json::Value = serde_json::from_str(&job.metadata_json).unwrap();
+                let mut ranges = metadata["layerSettingsRanges"].clone();
+                for (range, (start, end)) in ranges.as_array_mut().unwrap().iter_mut()
+                    .zip([(0.15, 0.5), (0.25, 0.3), (0.3, 0.35)])
+                {
+                    let object = range.as_object_mut().unwrap();
+                    object.remove("startLayer");
+                    object.remove("endLayer");
+                    object.insert("unit".into(), serde_json::json!("mm"));
+                    object.insert("startMm".into(), serde_json::json!(start));
+                    object.insert("endMm".into(), serde_json::json!(end));
+                }
+                metadata["layerSettingsRanges"] = ranges;
+                job.metadata_json = metadata.to_string();
+            }
             let artifacts = range_artifacts(&AzfPluginEncoder, &job);
             let entries = read_entries(Cursor::new(&artifacts[0]));
             for artifact in &artifacts[1..] { assert_eq!(entries, read_entries(Cursor::new(artifact)), "{variant} public finalizer parity"); }
@@ -888,7 +903,11 @@ mod tests {
             meta["layerSettingsRanges"] = serde_json::json!([]);
             plain.metadata_json = meta.to_string();
             assert_eq!(baseline, read_entries(Cursor::new(range_artifact(&AzfPluginEncoder, &plain))), "{variant} absent/empty parity");
-            meta["layerSettingsRanges"] = serde_json::json!([{"id":"later","startLayer":20,"endLayer":30,"settings":{"exposureSec":0}}]);
+            meta["layerSettingsRanges"] = if millimeters {
+                serde_json::json!([{"id":"later","unit":"mm","startMm":1.0,"endMm":1.5,"settings":{"exposureSec":0}}])
+            } else {
+                serde_json::json!([{"id":"later","startLayer":20,"endLayer":30,"settings":{"exposureSec":0}}])
+            };
             plain.metadata_json = meta.to_string();
             let beyond = read_entries(Cursor::new(range_artifact(&AzfPluginEncoder, &plain)));
             assert_eq!(manifest(&beyond, LAYERS_FILE), baseline_controller);
@@ -909,6 +928,16 @@ mod tests {
             assert_eq!(sparse_controller["paras"][0]["exposure_time"], 0.0);
             assert_eq!(sparse_controller["paras"][3]["zup_speed"], 2.0);
         }
+    }
+
+    #[test]
+    fn layer_settings_ranges_all_azf_variants_preserve_legacy_baselines() {
+        assert_azf_range_variants(false);
+    }
+
+    #[test]
+    fn layer_settings_ranges_mm_all_azf_variants_decode_records_and_payloads() {
+        assert_azf_range_variants(true);
     }
 
     #[test]
