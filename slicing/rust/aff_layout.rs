@@ -1138,7 +1138,7 @@ mod build_container_tests {
             let baseline = range_artifact(&AffPluginEncoder, &job);
             let base_defs = u32_at(&baseline, 36) as usize;
             metadata["layerSettingsRanges"] = serde_json::json!([
-                {"id":"blur","startLayer":1,"endLayer":8,"blendStart":4,"blendEnd":2,
+                {"id":"blur","startLayer":5,"endLayer":6,"blendStart":4,"blendEnd":2,
                  "settings":{"exposureSec":8,"liftHeightMm":8,"liftSpeedMmMin":120}}
             ]);
             job.metadata_json = metadata.to_string();
