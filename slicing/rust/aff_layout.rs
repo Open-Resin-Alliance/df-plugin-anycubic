@@ -11,7 +11,7 @@ use std::fs::File;
 use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 
 use super::layer_spool::StoredLayer;
-use crate::layer_settings::LayerSettingsSchedule;
+use crate::layer_settings::{LayerSettingField, LayerSettingsSchedule};
 
 // ── Primitive writers ───────────────────────────────────────────────
 
@@ -877,7 +877,12 @@ fn aff_layer_entries<'a>(
             layer_height_mm: timing.layer_height_mm, // relative thickness, not absolute Z
             non_zero_pixel_count: layer.non_zero_pixel_count,
         };
-        if let Some(patch) = schedule.patch_at(layer.index as u32) {
+        if let Some(patch) = schedule.resolve_at(layer.index as u32, |field| match field {
+            LayerSettingField::ExposureSec => f64::from(entry.exposure_time_sec),
+            LayerSettingField::LiftHeightMm => f64::from(entry.lift_height_mm),
+            LayerSettingField::LiftSpeedMmMin => f64::from(entry.lift_speed_mm_s) * 60.0,
+            _ => unreachable!("AFF validates supported fields before record output"),
+        }) {
             if let Some(value) = patch.exposure_sec { entry.exposure_time_sec = value as f32; }
             if let Some(value) = patch.lift_height_mm { entry.lift_height_mm = value as f32; }
             if let Some(value) = patch.lift_speed_mm_min { entry.lift_speed_mm_s = (value / 60.0) as f32; }
@@ -1120,6 +1125,41 @@ mod build_container_tests {
     #[test]
     fn layer_settings_ranges_mm_all_aff_variants_decode_records_and_payloads() {
         assert_aff_range_variants(true);
+    }
+
+    #[test]
+    fn layer_settings_ranges_blend_aff_actual_totals_speeds_and_transition_records() {
+        use super::super::{AffPluginEncoder, tests::{range_job, range_artifact, range_artifacts}};
+        for variant in ["pws", "pm3m"] {
+            let mut job = range_job(".aff", variant);
+            let mut metadata: serde_json::Value = serde_json::from_str(&job.metadata_json).unwrap();
+            metadata["layerSettingsRanges"] = serde_json::json!([]);
+            job.metadata_json = metadata.to_string();
+            let baseline = range_artifact(&AffPluginEncoder, &job);
+            let base_defs = u32_at(&baseline, 36) as usize;
+            metadata["layerSettingsRanges"] = serde_json::json!([
+                {"id":"blur","startLayer":1,"endLayer":8,"blendStart":4,"blendEnd":2,
+                 "settings":{"exposureSec":8,"liftHeightMm":8,"liftSpeedMmMin":120}}
+            ]);
+            job.metadata_json = metadata.to_string();
+            let artifacts = range_artifacts(&AffPluginEncoder, &job);
+            for bytes in &artifacts {
+                let defs = u32_at(bytes, 36) as usize;
+                for (index, weight) in [(0,0.),(1,0.25),(2,0.5),(3,0.75),(4,1.),(5,1.),(6,0.5),(7,0.)] {
+                    let entry = defs + 20 + index * 32;
+                    let base_entry = base_defs + 20 + index * 32;
+                    for (offset, target) in [(8,8.),(12,2.),(16,8.)] {
+                        let base = f64::from(f32::from_bits(u32_at(&baseline,base_entry+offset)));
+                        assert_eq!(f32::from_bits(u32_at(bytes,entry+offset)),
+                            (base + (target-base)*weight) as f32, "{variant} layer {} slot {offset}",index+1);
+                    }
+                    let address = u32_at(bytes,entry) as usize;
+                    let length = u32_at(bytes,entry+4) as usize;
+                    let base_address = u32_at(&baseline,base_entry) as usize;
+                    assert_eq!(&bytes[address..address+length], &baseline[base_address..base_address+length]);
+                }
+            }
+        }
     }
 
     fn u32_at(bytes: &[u8], offset: usize) -> u32 {

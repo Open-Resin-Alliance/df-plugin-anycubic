@@ -11,7 +11,7 @@
 //! - `layer_images/layer_N.pw0Img` — PW0 RLE encoded layer images
 
 use crate::engine::SlicerV3Error;
-use crate::layer_settings::LayerSettingsSchedule;
+use crate::layer_settings::{LayerSettingField, LayerSettingsSchedule};
 use crate::types::{LayerAreaStatsV3, SliceJobV3};
 
 use super::afz_metadata::{AfzBuildModel, AfzMachineProfile, AfzTimingModel};
@@ -448,7 +448,13 @@ fn build_layers_controller_json(
             timing.lift_speed_mm_s
         };
 
-        let patch = schedule.patch_at(layer_idx);
+        let patch = schedule.resolve_at(layer_idx, |field| match field {
+            LayerSettingField::ExposureSec => f64::from(exposure),
+            // The controller's legacy physical-record baseline is stage 1.
+            LayerSettingField::LiftHeightMm => f64::from(lift_height),
+            LayerSettingField::LiftSpeedMmMin => f64::from(lift_speed) * 60.0,
+            _ => unreachable!("AZF validates supported fields before record output"),
+        });
         let exposure = patch.and_then(|p| p.exposure_sec).map(|v| v as f32).unwrap_or(exposure);
         // Legacy controller heights are stage 1, not the global two-stage total.
         let lift_height = patch.and_then(|p| p.lift_height_mm).map(|v| v as f32).unwrap_or(lift_height);
@@ -938,6 +944,41 @@ mod tests {
     #[test]
     fn layer_settings_ranges_mm_all_azf_variants_decode_records_and_payloads() {
         assert_azf_range_variants(true);
+    }
+
+    #[test]
+    fn layer_settings_ranges_blend_azf_uses_controller_stage1_and_transition_baselines() {
+        use super::super::{AzfPluginEncoder, tests::{range_job, range_artifact, range_artifacts}};
+        for variant in ["pm4u", "pp1m"] {
+            let mut job = range_job(".azf", variant);
+            let mut metadata: serde_json::Value = serde_json::from_str(&job.metadata_json).unwrap();
+            metadata["layerSettingsRanges"] = serde_json::json!([]);
+            job.metadata_json = metadata.to_string();
+            let baseline = read_entries(Cursor::new(range_artifact(&AzfPluginEncoder,&job)));
+            let base_controller = manifest(&baseline,LAYERS_FILE);
+            metadata["layerSettingsRanges"] = serde_json::json!([
+                {"id":"blur","startLayer":1,"endLayer":8,"blendStart":4,"blendEnd":2,
+                 "settings":{"exposureSec":8,"liftHeightMm":8,"liftSpeedMmMin":120}}
+            ]);
+            job.metadata_json = metadata.to_string();
+            for bytes in range_artifacts(&AzfPluginEncoder,&job) {
+                let entries = read_entries(Cursor::new(bytes));
+                let controller = manifest(&entries,LAYERS_FILE);
+                for (index, weight) in [(0,0.),(1,0.25),(2,0.5),(3,0.75),(4,1.),(5,1.),(6,0.5),(7,0.)] {
+                    for (key,target) in [("exposure_time",8.),("zup_height",8.),("zup_speed",2.)] {
+                        let base = base_controller["paras"][index][key].as_f64().unwrap();
+                        let expected = (base + (target-base)*weight) as f32;
+                        assert_eq!(controller["paras"][index][key].as_f64().unwrap() as f32,
+                            expected,"{variant} layer {} {key}",index+1);
+                    }
+                }
+                for (name,payload) in &entries {
+                    if name.starts_with("layer_images/") {
+                        assert_eq!(payload,&baseline.iter().find(|(n,_)|n==name).unwrap().1);
+                    }
+                }
+            }
+        }
     }
 
     #[test]
