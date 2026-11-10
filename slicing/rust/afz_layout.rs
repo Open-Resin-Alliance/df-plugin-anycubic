@@ -18,7 +18,7 @@ use super::afz_preview;
 use super::layer_spool::StoredLayer;
 use std::fs::File;
 use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
-use zip::write::FileOptions;
+use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
 // ── JSON manifest file names ────────────────────────────────────────
@@ -82,8 +82,8 @@ pub(super) fn write_afz_container<W: Write + Seek>(
     };
 
     let mut zip = ZipWriter::new(output);
-    let options: FileOptions =
-        FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let options: SimpleFileOptions =
+        SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
     // Build previews up front (written later in correct order)
     let preview_1 = afz_preview::build_preview_png(
@@ -799,7 +799,7 @@ mod tests {
         (0..archive.len())
             .map(|index| {
                 let mut entry = archive.by_index(index).expect("ZIP entry");
-                let name = entry.name().to_string();
+                let name = entry.name().expect("ZIP entry name").into_owned();
                 let mut bytes = Vec::new();
                 entry.read_to_end(&mut bytes).expect("read ZIP entry");
                 (name, bytes)
